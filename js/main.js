@@ -6,12 +6,20 @@ const SCREENS = {
 };
 
 const SETTINGS_KEY = "keaghans-game-settings";
+let gameMounted = false;
 
 function showScreen(name) {
   for (const [key, el] of Object.entries(SCREENS)) {
     const active = key === name;
     el.hidden = !active;
     el.classList.toggle("is-active", active);
+  }
+
+  if (name === "play") {
+    window.IslandFoundry.mount(document.querySelector("#game-root"));
+    gameMounted = true;
+  } else if (gameMounted) {
+    window.IslandFoundry.unmount();
   }
 }
 
@@ -38,17 +46,14 @@ function applySettingsToUi(settings) {
 function bindSettings() {
   const volume = document.getElementById("setting-volume");
   const fps = document.getElementById("setting-fps");
-  const settings = loadSettings();
-  applySettingsToUi(settings);
+  applySettingsToUi(loadSettings());
 
   volume?.addEventListener("input", () => {
-    const next = { ...loadSettings(), volume: Number(volume.value) };
-    saveSettings(next);
+    saveSettings({ ...loadSettings(), volume: Number(volume.value) });
   });
 
   fps?.addEventListener("change", () => {
-    const next = { ...loadSettings(), showFps: fps.checked };
-    saveSettings(next);
+    saveSettings({ ...loadSettings(), showFps: fps.checked });
   });
 }
 

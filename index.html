@@ -21,7 +21,6 @@
     </div>
 
     <main class="app">
-      <!-- Title screen -->
       <section id="screen-title" class="screen screen--title is-active" aria-label="Title screen">
         <header class="brand">
           <p class="brand__eyebrow">Craft · Automate · Explore</p>
@@ -49,7 +48,6 @@
         </nav>
       </section>
 
-      <!-- Settings -->
       <section id="screen-settings" class="screen screen--panel" hidden aria-label="Settings">
         <div class="panel">
           <h2 class="panel__title">Settings</h2>
@@ -69,7 +67,6 @@
         </div>
       </section>
 
-      <!-- Mod -->
       <section id="screen-mod" class="screen screen--panel" hidden aria-label="Mods">
         <div class="panel">
           <h2 class="panel__title">Mod</h2>
@@ -86,22 +83,52 @@
         </div>
       </section>
 
-      <!-- Play / game shell -->
       <section id="screen-play" class="screen screen--play" hidden aria-label="Game">
         <header class="hud">
           <button type="button" class="hud__menu" data-action="back" aria-label="Return to title">
             ← Menu
           </button>
-          <p class="hud__hint">World coming online… gather, craft, automate.</p>
+          <p class="hud__goal" id="hud-goal">Goal: Chop 5 Wood from trees</p>
+          <div class="hud__meta">
+            <span id="hud-tool">Hand</span>
+            <span id="hud-build">Build: off</span>
+          </div>
         </header>
-        <div class="game-stage" id="game-stage">
-          <p class="game-stage__placeholder">
-            Island Foundry — first resources and crafting land here next.
-          </p>
+
+        <div class="game-layout" id="game-root">
+          <section class="world-panel" aria-label="Island">
+            <div class="world-toolbar">
+              <button type="button" data-game="tool-cycle">Cycle Tool</button>
+              <button type="button" id="btn-build-drill" data-game="build-drill">Place Drill</button>
+              <button type="button" id="btn-build-smelter" data-game="build-smelter">
+                Place Smelter
+              </button>
+              <button type="button" class="danger" data-game="reset">Reset</button>
+            </div>
+            <div id="world-grid" class="world-grid" role="grid" aria-label="Resource island"></div>
+            <p id="game-toast" class="game-toast" hidden></p>
+            <p class="world-help">
+              Click trees &amp; rocks to gather. Craft picks, then a Smelter and Drill. Place drills
+              on ore — they gather for you.
+            </p>
+          </section>
+
+          <aside class="side-panels">
+            <section class="side-card" aria-label="Inventory">
+              <h2>Inventory</h2>
+              <ul id="inventory-list" class="inventory-list"></ul>
+            </section>
+            <section class="side-card" aria-label="Crafting">
+              <h2>Crafting</h2>
+              <div id="craft-list" class="craft-list"></div>
+            </section>
+          </aside>
         </div>
       </section>
     </main>
 
+    <script src="js/data.js" defer></script>
+    <script src="js/game.js" defer></script>
     <script src="js/main.js" defer></script>
   </body>
 </html>
