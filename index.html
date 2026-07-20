@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Keaghan's Game</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true">
+      <div class="atmosphere__glow atmosphere__glow--left"></div>
+      <div class="atmosphere__glow atmosphere__glow--right"></div>
+      <div class="atmosphere__grid"></div>
+      <div class="atmosphere__belts"></div>
+    </div>
+
+    <main class="app">
+      <!-- Title screen -->
+      <section id="screen-title" class="screen screen--title is-active" aria-label="Title screen">
+        <header class="brand">
+          <p class="brand__eyebrow">Craft · Automate · Explore</p>
+          <h1 class="brand__title">Keaghan's Game</h1>
+          <p class="brand__tagline">
+            Click to gather. Craft to grow. Build a factory that runs itself.
+          </p>
+        </header>
+
+        <nav class="title-actions" aria-label="Main menu">
+          <button type="button" class="menu-btn menu-btn--side" data-action="settings">
+            <span class="menu-btn__icon" aria-hidden="true">⚙</span>
+            <span class="menu-btn__label">Settings</span>
+          </button>
+
+          <button type="button" class="menu-btn menu-btn--play" data-action="play">
+            <span class="menu-btn__icon" aria-hidden="true">▶</span>
+            <span class="menu-btn__label">Play</span>
+          </button>
+
+          <button type="button" class="menu-btn menu-btn--side" data-action="mod">
+            <span class="menu-btn__icon" aria-hidden="true">◇</span>
+            <span class="menu-btn__label">Mod</span>
+          </button>
+        </nav>
+      </section>
+
+      <!-- Settings -->
+      <section id="screen-settings" class="screen screen--panel" hidden aria-label="Settings">
+        <div class="panel">
+          <h2 class="panel__title">Settings</h2>
+          <p class="panel__copy">Tune the game to how you like to play.</p>
+
+          <label class="field">
+            <span class="field__label">Master volume</span>
+            <input id="setting-volume" type="range" min="0" max="100" value="70" />
+          </label>
+
+          <label class="field field--row">
+            <span class="field__label">Show FPS</span>
+            <input id="setting-fps" type="checkbox" />
+          </label>
+
+          <button type="button" class="panel__back" data-action="back">Back</button>
+        </div>
+      </section>
+
+      <!-- Mod -->
+      <section id="screen-mod" class="screen screen--panel" hidden aria-label="Mods">
+        <div class="panel">
+          <h2 class="panel__title">Mod</h2>
+          <p class="panel__copy">
+            Custom recipes, machines, and worlds will live here. Coming soon —
+            a place for Keaghan to invent new parts for the factory.
+          </p>
+          <ul class="mod-list">
+            <li>Custom crafting recipes</li>
+            <li>New machines &amp; belts</li>
+            <li>Player-made islands</li>
+          </ul>
+          <button type="button" class="panel__back" data-action="back">Back</button>
+        </div>
+      </section>
+
+      <!-- Play / game shell -->
+      <section id="screen-play" class="screen screen--play" hidden aria-label="Game">
+        <header class="hud">
+          <button type="button" class="hud__menu" data-action="back" aria-label="Return to title">
+            ← Menu
+          </button>
+          <p class="hud__hint">World coming online… gather, craft, automate.</p>
+        </header>
+        <div class="game-stage" id="game-stage">
+          <p class="game-stage__placeholder">
+            Island Foundry — first resources and crafting land here next.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <script src="js/main.js" defer></script>
+  </body>
+</html>
