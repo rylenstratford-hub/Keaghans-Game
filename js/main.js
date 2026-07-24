@@ -188,17 +188,35 @@ function escapeHtml(text) {
     .replaceAll('"', "&quot;");
 }
 
+function setProfileChromeVisible(visible) {
+  const chrome = document.getElementById("profile-chrome");
+  const entry = document.getElementById("profile-entry");
+  if (chrome) {
+    chrome.classList.toggle("is-play-hidden", !visible);
+    chrome.setAttribute("aria-hidden", String(!visible));
+  }
+  if (entry) {
+    entry.hidden = false;
+    entry.tabIndex = visible ? 0 : -1;
+  }
+}
+
 function showScreen(name) {
+  // Hard gate: never mount play without an active profile.
+  if (name === "play" && !getActiveProfile()) {
+    setFormError("Create a profile name to play.");
+    name = "profile";
+  }
+
   for (const [key, el] of Object.entries(SCREENS)) {
+    if (!el) continue;
     const active = key === name;
     el.hidden = !active;
     el.classList.toggle("is-active", active);
   }
 
-  const profileEntry = document.getElementById("profile-entry");
-  if (profileEntry) {
-    profileEntry.hidden = name === "play";
-  }
+  // Visible on title / settings / mod / profile — hidden only during play.
+  setProfileChromeVisible(name !== "play");
 
   if (name === "play") {
     window.IslandFoundry.mount(document.querySelector("#game-root"));
@@ -208,7 +226,7 @@ function showScreen(name) {
     gameMounted = false;
   }
 
-  if (name === "profile") renderProfileUi();
+  renderProfileUi();
 }
 
 function loadSettings() {
@@ -288,8 +306,14 @@ function bindActions() {
     if (!button || button.disabled) return;
 
     const action = button.dataset.action;
-    if (action === "settings") showScreen("settings");
-    if (action === "mod") showScreen("mod");
+    if (action === "settings") {
+      showScreen("settings");
+      return;
+    }
+    if (action === "mod") {
+      showScreen("mod");
+      return;
+    }
     if (action === "profile") {
       showScreen("profile");
       document.getElementById("profile-name-input")?.focus();
@@ -297,7 +321,6 @@ function bindActions() {
     }
     if (action === "back") {
       showScreen("title");
-      renderProfileUi();
       return;
     }
     if (action === "play") {
@@ -315,5 +338,5 @@ function bindActions() {
 bindSettings();
 bindProfiles();
 bindActions();
-renderProfileUi();
+setProfileChromeVisible(true);
 showScreen("title");

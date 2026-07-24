@@ -112,23 +112,39 @@ input {
   padding: 2rem 1.25rem 1.5rem;
 }
 
-/* Outside .app so fixed positioning is viewport-relative (not trapped in
-   flex/grid stacking). Keeps top-left clicks reliable on mobile Safari. */
-.profile-entry {
+/* Viewport-fixed chrome layer (not a body flex item). Isolates the profile
+   control from .app stacking and from body { display:flex } side-effects. */
+.profile-chrome {
   position: fixed;
-  top: max(0.75rem, env(safe-area-inset-top, 0px));
-  left: max(0.75rem, env(safe-area-inset-left, 0px));
-  z-index: 50;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 100;
+  flex: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  width: auto;
+  height: auto;
+  pointer-events: none;
+}
+
+.profile-chrome.is-play-hidden {
+  display: none !important;
+}
+
+.profile-entry {
+  position: relative;
   appearance: none;
   display: inline-flex;
   align-items: center;
   gap: 0.65rem;
+  min-width: 2.75rem;
   min-height: 2.75rem;
   max-width: min(14rem, calc(100vw - 2rem));
   padding: 0.35rem 0.85rem 0.35rem 0.35rem;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(61, 220, 151, 0.55);
   border-radius: 999px;
-  background: rgba(18, 32, 28, 0.92);
+  background: rgba(18, 32, 28, 0.96);
   color: var(--ink);
   cursor: pointer;
   pointer-events: auto;
@@ -141,8 +157,11 @@ input {
     transform 0.15s ease;
 }
 
-.profile-entry[hidden] {
-  display: none !important;
+@supports (top: env(safe-area-inset-top)) {
+  .profile-chrome {
+    top: max(0.75rem, env(safe-area-inset-top));
+    left: max(0.75rem, env(safe-area-inset-left));
+  }
 }
 
 .profile-entry:hover,

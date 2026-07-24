@@ -20,17 +20,21 @@
       <div class="atmosphere__belts"></div>
     </div>
 
-    <button
-      type="button"
-      id="profile-entry"
-      class="profile-entry"
-      data-action="profile"
-      aria-label="Profiles"
-      title="Profiles"
-    >
-      <span class="profile-entry__avatar" id="profile-entry-avatar" aria-hidden="true">?</span>
-      <span class="profile-entry__name" id="profile-entry-name">Create profile</span>
-    </button>
+    <!-- Fixed chrome host: not a body flex item, so the profile control cannot
+         collapse/stack under .app after being lifted out of .app. -->
+    <div class="profile-chrome" id="profile-chrome">
+      <button
+        type="button"
+        id="profile-entry"
+        class="profile-entry"
+        data-action="profile"
+        aria-label="Profiles"
+        title="Profiles"
+      >
+        <span class="profile-entry__avatar" id="profile-entry-avatar" aria-hidden="true">?</span>
+        <span class="profile-entry__name" id="profile-entry-name">Create profile</span>
+      </button>
+    </div>
 
     <main class="app">
       <section id="screen-title" class="screen screen--title is-active" aria-label="Title screen">
@@ -48,7 +52,15 @@
             <span class="menu-btn__label">Settings</span>
           </button>
 
-          <button type="button" class="menu-btn menu-btn--play" data-action="play" id="play-button">
+          <button
+            type="button"
+            class="menu-btn menu-btn--play is-locked"
+            data-action="play"
+            id="play-button"
+            disabled
+            aria-disabled="true"
+            title="Create a profile first"
+          >
             <span class="menu-btn__icon" aria-hidden="true">▶</span>
             <span class="menu-btn__label">Play</span>
           </button>
@@ -58,7 +70,7 @@
             <span class="menu-btn__label">Mod</span>
           </button>
         </nav>
-        <p id="play-gate-hint" class="play-gate-hint" hidden>
+        <p id="play-gate-hint" class="play-gate-hint">
           Create a profile name (top left) before you can play.
         </p>
       </section>
