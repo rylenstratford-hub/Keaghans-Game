@@ -121,12 +121,14 @@ function renderProfileUi() {
   const avatar = document.getElementById("profile-entry-avatar");
   const nameEl = document.getElementById("profile-entry-name");
   const playBtn = document.getElementById("play-button");
-  const hint = document.getElementById("play-gate-hint");
+  const titleGate = document.getElementById("title-profile-gate");
   const activeLabel = document.getElementById("profile-active-label");
   const countEl = document.getElementById("profile-count");
   const listEl = document.getElementById("profile-list");
   const emptyEl = document.getElementById("profile-empty");
   const createBtn = document.querySelector(".profile-create__btn");
+  const chrome = document.getElementById("profile-chrome");
+  const entry = document.getElementById("profile-entry");
 
   if (avatar) avatar.textContent = active ? initialFromName(active.name) : "?";
   if (nameEl) nameEl.textContent = active ? active.name : "Create profile";
@@ -138,7 +140,21 @@ function renderProfileUi() {
     playBtn.setAttribute("aria-disabled", String(!canPlay));
     playBtn.title = canPlay ? "Play" : "Create a profile first";
   }
-  if (hint) hint.hidden = canPlay;
+  // Title-screen CTA is the primary create path — always visible with no profile.
+  if (titleGate) titleGate.hidden = canPlay;
+
+  // Top-left chrome is secondary: only show once a profile exists (and not in play).
+  const onPlay = SCREENS.play && !SCREENS.play.hidden;
+  if (chrome) {
+    const showChrome = canPlay && !onPlay;
+    chrome.classList.toggle("is-play-hidden", !showChrome);
+    chrome.setAttribute("aria-hidden", String(!showChrome));
+  }
+  if (entry) {
+    entry.hidden = false;
+    entry.tabIndex = canPlay && !onPlay ? 0 : -1;
+    entry.setAttribute("aria-label", active ? `Profile: ${active.name}` : "Profiles");
+  }
 
   if (activeLabel) {
     if (active) {
@@ -188,19 +204,6 @@ function escapeHtml(text) {
     .replaceAll('"', "&quot;");
 }
 
-function setProfileChromeVisible(visible) {
-  const chrome = document.getElementById("profile-chrome");
-  const entry = document.getElementById("profile-entry");
-  if (chrome) {
-    chrome.classList.toggle("is-play-hidden", !visible);
-    chrome.setAttribute("aria-hidden", String(!visible));
-  }
-  if (entry) {
-    entry.hidden = false;
-    entry.tabIndex = visible ? 0 : -1;
-  }
-}
-
 function showScreen(name) {
   // Hard gate: never mount play without an active profile.
   if (name === "play" && !getActiveProfile()) {
@@ -215,9 +218,6 @@ function showScreen(name) {
     el.classList.toggle("is-active", active);
   }
 
-  // Visible on title / settings / mod / profile — hidden only during play.
-  setProfileChromeVisible(name !== "play");
-
   if (name === "play") {
     window.IslandFoundry.mount(document.querySelector("#game-root"));
     gameMounted = true;
@@ -226,6 +226,7 @@ function showScreen(name) {
     gameMounted = false;
   }
 
+  // Chrome visibility depends on active profile + current screen.
   renderProfileUi();
 }
 
@@ -338,5 +339,4 @@ function bindActions() {
 bindSettings();
 bindProfiles();
 bindActions();
-setProfileChromeVisible(true);
 showScreen("title");

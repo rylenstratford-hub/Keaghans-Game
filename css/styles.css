@@ -197,11 +197,65 @@ input {
   font-size: 0.92rem;
 }
 
+/* Primary create affordance lives in the title composition (not fixed chrome). */
+.title-profile-gate {
+  display: grid;
+  justify-items: center;
+  gap: 0.65rem;
+  width: min(420px, 100%);
+}
+
+.title-profile-gate[hidden] {
+  display: none !important;
+}
+
+.title-profile-cta {
+  appearance: none;
+  width: 100%;
+  max-width: 22rem;
+  min-height: 3.25rem;
+  padding: 0.9rem 1.4rem;
+  border: 2px solid rgba(240, 180, 41, 0.95);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 220, 120, 0.45), transparent 55%),
+    linear-gradient(180deg, #f0b429 0%, #c88912 100%);
+  color: #141008;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(255, 231, 163, 0.35) inset;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    filter 0.15s ease;
+}
+
+.title-profile-cta:hover,
+.title-profile-cta:focus-visible {
+  outline: none;
+  transform: translateY(-2px);
+  filter: brightness(1.05);
+  box-shadow:
+    0 14px 32px rgba(0, 0, 0, 0.4),
+    0 0 24px rgba(240, 180, 41, 0.35);
+}
+
+.title-profile-cta:active {
+  transform: translateY(0);
+}
+
 .play-gate-hint {
-  margin: 0.35rem 0 0;
-  color: var(--accent-hot);
+  margin: 0;
+  color: #ffe7a3;
   font-size: 0.95rem;
   font-weight: 600;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
 .menu-btn--play.is-locked,
@@ -402,7 +456,7 @@ input {
 
 .screen--title {
   display: grid;
-  gap: 3.5rem;
+  gap: 2.25rem;
   justify-items: center;
   text-align: center;
   animation: rise 0.7s ease-out both;
