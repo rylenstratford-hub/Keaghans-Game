@@ -1,8 +1,13 @@
 window.IslandFoundry = (() => {
-  const SAVE_KEY = "keaghans-game-save-v1";
+  const SAVE_KEY_BASE = "keaghans-game-save-v1";
   const COLS = 12;
   const ROWS = 8;
   const { GameData } = window;
+
+  function saveKey() {
+    const id = window.KeaghanProfiles?.getActiveId?.();
+    return id ? `${SAVE_KEY_BASE}:${id}` : SAVE_KEY_BASE;
+  }
 
   function emptyInv() {
     const inv = {};
@@ -75,7 +80,7 @@ window.IslandFoundry = (() => {
 
   function loadState() {
     try {
-      const raw = localStorage.getItem(SAVE_KEY);
+      const raw = localStorage.getItem(saveKey());
       if (!raw) return createState();
       const saved = JSON.parse(raw);
       const fresh = createState();
@@ -95,7 +100,7 @@ window.IslandFoundry = (() => {
   }
 
   function saveState(state) {
-    localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+    localStorage.setItem(saveKey(), JSON.stringify(state));
   }
 
   function canAfford(state, cost) {
@@ -449,7 +454,7 @@ window.IslandFoundry = (() => {
     }
     if (action === "reset") {
       if (confirm("Reset Island Foundry progress?")) {
-        localStorage.removeItem(SAVE_KEY);
+        localStorage.removeItem(saveKey());
         state = createState();
         setToast(state, "New island ready");
       }

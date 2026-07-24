@@ -21,6 +21,18 @@
     </div>
 
     <main class="app">
+      <button
+        type="button"
+        id="profile-entry"
+        class="profile-entry"
+        data-action="profile"
+        aria-label="Profiles"
+        title="Profiles"
+      >
+        <span class="profile-entry__avatar" id="profile-entry-avatar" aria-hidden="true">?</span>
+        <span class="profile-entry__name" id="profile-entry-name">Create profile</span>
+      </button>
+
       <section id="screen-title" class="screen screen--title is-active" aria-label="Title screen">
         <header class="brand">
           <p class="brand__eyebrow">Craft · Automate · Explore</p>
@@ -36,7 +48,7 @@
             <span class="menu-btn__label">Settings</span>
           </button>
 
-          <button type="button" class="menu-btn menu-btn--play" data-action="play">
+          <button type="button" class="menu-btn menu-btn--play" data-action="play" id="play-button">
             <span class="menu-btn__icon" aria-hidden="true">▶</span>
             <span class="menu-btn__label">Play</span>
           </button>
@@ -46,6 +58,45 @@
             <span class="menu-btn__label">Mod</span>
           </button>
         </nav>
+        <p id="play-gate-hint" class="play-gate-hint" hidden>
+          Create a profile name (top left) before you can play.
+        </p>
+      </section>
+
+      <section id="screen-profile" class="screen screen--panel" hidden aria-label="Profiles">
+        <div class="panel panel--profile">
+          <h2 class="panel__title">Profiles</h2>
+          <p class="panel__copy">
+            Pick a name to play. No password — just local profiles on this device
+            (up to 100).
+          </p>
+
+          <p id="profile-active-label" class="profile-active" hidden></p>
+
+          <form id="profile-create-form" class="profile-create" autocomplete="off">
+            <label class="field">
+              <span class="field__label">New profile name</span>
+              <input
+                id="profile-name-input"
+                type="text"
+                maxlength="24"
+                minlength="1"
+                placeholder="Enter a username"
+                required
+              />
+            </label>
+            <button type="submit" class="profile-create__btn">Create profile</button>
+          </form>
+          <p id="profile-form-error" class="profile-error" hidden role="alert"></p>
+
+          <div class="profile-list-wrap">
+            <h3 class="profile-list__heading">Saved profiles <span id="profile-count">(0 / 100)</span></h3>
+            <ul id="profile-list" class="profile-list" aria-label="Saved profiles"></ul>
+            <p id="profile-empty" class="profile-empty">No profiles yet — create one above.</p>
+          </div>
+
+          <button type="button" class="panel__back" data-action="back">Back</button>
+        </div>
       </section>
 
       <section id="screen-settings" class="screen screen--panel" hidden aria-label="Settings">
@@ -126,6 +177,10 @@
         </div>
       </section>
     </main>
+
+    <footer class="site-credit">
+      This project is supported by the help of Maggoo
+    </footer>
 
     <script src="js/data.js" defer></script>
     <script src="js/game.js" defer></script>
