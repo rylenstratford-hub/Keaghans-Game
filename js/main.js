@@ -285,20 +285,26 @@ function bindProfiles() {
 function bindActions() {
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-action]");
-    if (!button) return;
+    if (!button || button.disabled) return;
 
     const action = button.dataset.action;
     if (action === "settings") showScreen("settings");
     if (action === "mod") showScreen("mod");
-    if (action === "profile") showScreen("profile");
+    if (action === "profile") {
+      showScreen("profile");
+      document.getElementById("profile-name-input")?.focus();
+      return;
+    }
     if (action === "back") {
       showScreen("title");
       renderProfileUi();
+      return;
     }
     if (action === "play") {
       if (!getActiveProfile()) {
         setFormError("Create a profile name to play.");
         showScreen("profile");
+        document.getElementById("profile-name-input")?.focus();
         return;
       }
       showScreen("play");

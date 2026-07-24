@@ -112,15 +112,18 @@ input {
   padding: 2rem 1.25rem 1.5rem;
 }
 
+/* Outside .app so fixed positioning is viewport-relative (not trapped in
+   flex/grid stacking). Keeps top-left clicks reliable on mobile Safari. */
 .profile-entry {
   position: fixed;
-  top: 1rem;
-  left: 1rem;
-  z-index: 5;
+  top: max(0.75rem, env(safe-area-inset-top, 0px));
+  left: max(0.75rem, env(safe-area-inset-left, 0px));
+  z-index: 50;
   appearance: none;
   display: inline-flex;
   align-items: center;
   gap: 0.65rem;
+  min-height: 2.75rem;
   max-width: min(14rem, calc(100vw - 2rem));
   padding: 0.35rem 0.85rem 0.35rem 0.35rem;
   border: 1px solid var(--line);
@@ -128,11 +131,18 @@ input {
   background: rgba(18, 32, 28, 0.92);
   color: var(--ink);
   cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   box-shadow: var(--shadow);
   transition:
     border-color 0.15s ease,
     background 0.15s ease,
     transform 0.15s ease;
+}
+
+.profile-entry[hidden] {
+  display: none !important;
 }
 
 .profile-entry:hover,
