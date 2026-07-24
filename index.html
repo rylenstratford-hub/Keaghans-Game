@@ -20,22 +20,6 @@
       <div class="atmosphere__belts"></div>
     </div>
 
-    <!-- Fixed chrome host: not a body flex item, so the profile control cannot
-         collapse/stack under .app after being lifted out of .app. -->
-    <div class="profile-chrome" id="profile-chrome">
-      <button
-        type="button"
-        id="profile-entry"
-        class="profile-entry"
-        data-action="profile"
-        aria-label="Profiles"
-        title="Profiles"
-      >
-        <span class="profile-entry__avatar" id="profile-entry-avatar" aria-hidden="true">?</span>
-        <span class="profile-entry__name" id="profile-entry-name">Create profile</span>
-      </button>
-    </div>
-
     <main class="app">
       <section id="screen-title" class="screen screen--title is-active" aria-label="Title screen">
         <header class="brand">
@@ -45,20 +29,6 @@
             Click to gather. Craft to grow. Build a factory that runs itself.
           </p>
         </header>
-
-        <div id="title-profile-gate" class="title-profile-gate">
-          <button
-            type="button"
-            class="title-profile-cta"
-            id="title-profile-cta"
-            data-action="profile"
-          >
-            Create profile
-          </button>
-          <p class="play-gate-hint">
-            Choose a name first — Play unlocks after you create a profile.
-          </p>
-        </div>
 
         <nav class="title-actions" aria-label="Main menu">
           <button type="button" class="menu-btn menu-btn--side" data-action="settings">
@@ -84,6 +54,10 @@
             <span class="menu-btn__label">Mod</span>
           </button>
         </nav>
+
+        <p id="play-gate-hint" class="play-gate-hint">
+          Create a profile (top left) before you can play.
+        </p>
       </section>
 
       <section id="screen-profile" class="screen screen--panel" hidden aria-label="Profiles">
@@ -204,6 +178,22 @@
     <footer class="site-credit">
       This project is supported by the help of Maggoo
     </footer>
+
+    <!-- Mounted last on body (outside .app) so nothing can sit above it in paint order.
+         Fixed + z-index 9999 + pointer-events auto on the button = reliable hit-testing. -->
+    <div class="profile-chrome" id="profile-chrome">
+      <button
+        type="button"
+        id="profile-entry"
+        class="profile-entry is-create"
+        data-action="profile"
+        aria-label="Create profile"
+        title="Create profile"
+      >
+        <span class="profile-entry__avatar" id="profile-entry-avatar" aria-hidden="true">+</span>
+        <span class="profile-entry__name" id="profile-entry-name">Create profile</span>
+      </button>
+    </div>
 
     <script src="js/data.js" defer></script>
     <script src="js/game.js" defer></script>

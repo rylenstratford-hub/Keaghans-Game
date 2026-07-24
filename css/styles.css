@@ -50,11 +50,15 @@ input {
   font: inherit;
 }
 
+.atmosphere,
+.atmosphere * {
+  pointer-events: none !important;
+}
+
 .atmosphere {
   position: fixed;
   inset: 0;
   z-index: 0;
-  pointer-events: none;
   background:
     radial-gradient(ellipse 80% 50% at 50% 110%, rgba(240, 180, 41, 0.12), transparent 55%),
     linear-gradient(165deg, #0b1210 0%, #14201c 45%, #0e1814 100%);
@@ -112,13 +116,12 @@ input {
   padding: 2rem 1.25rem 1.5rem;
 }
 
-/* Viewport-fixed chrome layer (not a body flex item). Isolates the profile
-   control from .app stacking and from body { display:flex } side-effects. */
+/* Last-on-body viewport chrome. z-index above .app so top-left is never under MAIN. */
 .profile-chrome {
   position: fixed;
-  top: 0.75rem;
-  left: 0.75rem;
-  z-index: 100;
+  top: 0.85rem;
+  left: 0.85rem;
+  z-index: 9999;
   flex: none;
   margin: 0;
   padding: 0;
@@ -137,51 +140,87 @@ input {
   appearance: none;
   display: inline-flex;
   align-items: center;
-  gap: 0.65rem;
-  min-width: 2.75rem;
-  min-height: 2.75rem;
-  max-width: min(14rem, calc(100vw - 2rem));
-  padding: 0.35rem 0.85rem 0.35rem 0.35rem;
-  border: 1px solid rgba(61, 220, 151, 0.55);
+  gap: 0.7rem;
+  min-width: 3rem;
+  min-height: 3.25rem;
+  max-width: min(18rem, calc(100vw - 1.7rem));
+  padding: 0.4rem 1.1rem 0.4rem 0.4rem;
+  border: 2px solid rgba(61, 220, 151, 0.65);
   border-radius: 999px;
-  background: rgba(18, 32, 28, 0.96);
+  background: rgba(18, 32, 28, 0.98);
   color: var(--ink);
   cursor: pointer;
   pointer-events: auto;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
-  box-shadow: var(--shadow);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(61, 220, 151, 0.15) inset;
   transition:
     border-color 0.15s ease,
     background 0.15s ease,
-    transform 0.15s ease;
+    transform 0.15s ease,
+    filter 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.profile-entry.is-create {
+  border-color: rgba(240, 180, 41, 0.95);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 220, 120, 0.45), transparent 55%),
+    linear-gradient(180deg, #f0b429 0%, #c88912 100%);
+  color: #141008;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(255, 231, 163, 0.35) inset,
+    0 0 24px rgba(240, 180, 41, 0.28);
+}
+
+.profile-entry.is-create .profile-entry__avatar {
+  background:
+    radial-gradient(circle at 35% 30%, #fff4c2, transparent 50%),
+    linear-gradient(145deg, #ffe7a3, #f0b429);
+  color: #141008;
+}
+
+.profile-entry.is-create .profile-entry__name {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 @supports (top: env(safe-area-inset-top)) {
   .profile-chrome {
-    top: max(0.75rem, env(safe-area-inset-top));
-    left: max(0.75rem, env(safe-area-inset-left));
+    top: max(0.85rem, env(safe-area-inset-top));
+    left: max(0.85rem, env(safe-area-inset-left));
   }
 }
 
 .profile-entry:hover,
 .profile-entry:focus-visible {
-  border-color: rgba(61, 220, 151, 0.7);
-  background: rgba(24, 42, 36, 0.96);
   outline: none;
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  filter: brightness(1.04);
+}
+
+.profile-entry:not(.is-create):hover,
+.profile-entry:not(.is-create):focus-visible {
+  border-color: rgba(61, 220, 151, 0.85);
+  background: rgba(24, 42, 36, 0.98);
 }
 
 .profile-entry__avatar {
   flex: 0 0 auto;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: 2.5rem;
+  height: 2.5rem;
   border-radius: 50%;
   display: grid;
   place-items: center;
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: 0.95rem;
+  font-size: 1.15rem;
   letter-spacing: 0.02em;
   color: #0b1210;
   background:
@@ -193,69 +232,22 @@ input {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 600;
-  font-size: 0.92rem;
-}
-
-/* Primary create affordance lives in the title composition (not fixed chrome). */
-.title-profile-gate {
-  display: grid;
-  justify-items: center;
-  gap: 0.65rem;
-  width: min(420px, 100%);
-}
-
-.title-profile-gate[hidden] {
-  display: none !important;
-}
-
-.title-profile-cta {
-  appearance: none;
-  width: 100%;
-  max-width: 22rem;
-  min-height: 3.25rem;
-  padding: 0.9rem 1.4rem;
-  border: 2px solid rgba(240, 180, 41, 0.95);
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at 50% 0%, rgba(255, 220, 120, 0.45), transparent 55%),
-    linear-gradient(180deg, #f0b429 0%, #c88912 100%);
-  color: #141008;
-  cursor: pointer;
-  font-family: var(--font-display);
+  font-weight: 700;
   font-size: 1rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  box-shadow:
-    0 10px 28px rgba(0, 0, 0, 0.35),
-    0 0 0 1px rgba(255, 231, 163, 0.35) inset;
-  transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease,
-    filter 0.15s ease;
-}
-
-.title-profile-cta:hover,
-.title-profile-cta:focus-visible {
-  outline: none;
-  transform: translateY(-2px);
-  filter: brightness(1.05);
-  box-shadow:
-    0 14px 32px rgba(0, 0, 0, 0.4),
-    0 0 24px rgba(240, 180, 41, 0.35);
-}
-
-.title-profile-cta:active {
-  transform: translateY(0);
 }
 
 .play-gate-hint {
   margin: 0;
+  max-width: 28rem;
   color: #ffe7a3;
   font-size: 0.95rem;
   font-weight: 600;
+  text-align: center;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+.play-gate-hint[hidden] {
+  display: none !important;
 }
 
 .menu-btn--play.is-locked,

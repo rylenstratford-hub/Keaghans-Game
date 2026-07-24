@@ -1,2 +1,5 @@
 # Local Netlify folder
 .netlify
+
+# Local hit-test scratch
+.hit-test/

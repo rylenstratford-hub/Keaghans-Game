@@ -121,7 +121,7 @@ function renderProfileUi() {
   const avatar = document.getElementById("profile-entry-avatar");
   const nameEl = document.getElementById("profile-entry-name");
   const playBtn = document.getElementById("play-button");
-  const titleGate = document.getElementById("title-profile-gate");
+  const playHint = document.getElementById("play-gate-hint");
   const activeLabel = document.getElementById("profile-active-label");
   const countEl = document.getElementById("profile-count");
   const listEl = document.getElementById("profile-list");
@@ -130,7 +130,7 @@ function renderProfileUi() {
   const chrome = document.getElementById("profile-chrome");
   const entry = document.getElementById("profile-entry");
 
-  if (avatar) avatar.textContent = active ? initialFromName(active.name) : "?";
+  if (avatar) avatar.textContent = active ? initialFromName(active.name) : "+";
   if (nameEl) nameEl.textContent = active ? active.name : "Create profile";
 
   const canPlay = Boolean(active);
@@ -140,20 +140,22 @@ function renderProfileUi() {
     playBtn.setAttribute("aria-disabled", String(!canPlay));
     playBtn.title = canPlay ? "Play" : "Create a profile first";
   }
-  // Title-screen CTA is the primary create path — always visible with no profile.
-  if (titleGate) titleGate.hidden = canPlay;
+  if (playHint) playHint.hidden = canPlay;
 
-  // Top-left chrome is secondary: only show once a profile exists (and not in play).
+  // Top-left chrome is the primary create/profile control — always on unless playing.
   const onPlay = SCREENS.play && !SCREENS.play.hidden;
+  const showChrome = !onPlay;
   if (chrome) {
-    const showChrome = canPlay && !onPlay;
     chrome.classList.toggle("is-play-hidden", !showChrome);
     chrome.setAttribute("aria-hidden", String(!showChrome));
   }
   if (entry) {
     entry.hidden = false;
-    entry.tabIndex = canPlay && !onPlay ? 0 : -1;
-    entry.setAttribute("aria-label", active ? `Profile: ${active.name}` : "Profiles");
+    entry.disabled = false;
+    entry.tabIndex = showChrome ? 0 : -1;
+    entry.classList.toggle("is-create", !active);
+    entry.setAttribute("aria-label", active ? `Profile: ${active.name}` : "Create profile");
+    entry.title = active ? active.name : "Create profile";
   }
 
   if (activeLabel) {
