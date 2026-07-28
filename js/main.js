@@ -2,6 +2,7 @@ const SCREENS = {
   title: document.querySelector("#screen-title"),
   settings: document.querySelector("#screen-settings"),
   mod: document.querySelector("#screen-mod"),
+  saves: document.querySelector("#screen-saves"),
   play: document.querySelector("#screen-play"),
   profile: document.querySelector("#screen-profile"),
 };
@@ -10,12 +11,17 @@ const SETTINGS_KEY = "keaghans-game-settings";
 const PROFILES_KEY = "keaghans-game-profiles-v1";
 const MAX_PROFILES = 100;
 const NAME_MAX = 24;
+const SLOT_COUNT = window.IslandFoundry?.SLOT_COUNT ?? 5;
 
 let gameMounted = false;
+let activeSlot = 1;
 
 window.KeaghanProfiles = {
   getActiveId() {
     return loadProfiles().activeId;
+  },
+  getActiveSlot() {
+    return activeSlot;
   },
 };
 
@@ -80,6 +86,7 @@ function selectProfile(id) {
     gameMounted = false;
   }
   data.activeId = id;
+  activeSlot = 1;
   saveProfiles(data);
   return true;
 }
@@ -92,7 +99,7 @@ function deleteProfile(id) {
     window.IslandFoundry.unmount();
     gameMounted = false;
   }
-  localStorage.removeItem(`keaghans-game-save-v1:${id}`);
+  window.IslandFoundry.clearAllSlots(id);
   data.profiles = next;
   data.activeId = data.activeId === id ? next[0]?.id ?? null : data.activeId;
   saveProfiles(data);
@@ -113,6 +120,96 @@ function setFormError(message) {
   }
   el.hidden = false;
   el.textContent = message;
+}
+
+function formatSaveDate(ts) {
+  if (!ts) return "Unknown date";
+  try {
+    return new Date(ts).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch {
+    return "Unknown date";
+  }
+}
+
+function toolLabel(toolId) {
+  if (!toolId || toolId === "hand") return "Hand";
+  return window.GameData?.getItem?.(toolId)?.name || toolId;
+}
+
+function renderSaveSlots() {
+  const list = document.getElementById("save-slot-list");
+  const label = document.getElementById("saves-profile-label");
+  const active = getActiveProfile();
+  if (!list) return;
+
+  if (label) {
+    if (active) {
+      label.hidden = false;
+      label.textContent = `Saves for ${active.name}`;
+    } else {
+      label.hidden = true;
+      label.textContent = "";
+    }
+  }
+
+  list.innerHTML = "";
+  if (!active) return;
+
+  for (let slot = 1; slot <= SLOT_COUNT; slot++) {
+    const meta = window.IslandFoundry.getSlotMeta(active.id, slot);
+    const li = document.createElement("li");
+    li.className = "save-slot-row";
+
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.className = "save-slot" + (meta.empty ? " is-empty" : "");
+    openBtn.dataset.saveOpen = String(slot);
+
+    const title = meta.empty ? "Empty Slot" : "Factory Save";
+    const metaText = meta.empty
+      ? "No data — start a new island"
+      : `${formatSaveDate(meta.startedAt)} · Gathered ${meta.totalGathered} · ${toolLabel(meta.tool)}`;
+    const action = meta.empty ? "New Game" : "Continue";
+
+    openBtn.innerHTML = `
+      <span class="save-slot__index">SLOT ${slot}</span>
+      <span class="save-slot__body">
+        <span class="save-slot__title">${title}</span>
+        <span class="save-slot__meta">${escapeHtml(metaText)}</span>
+      </span>
+      <span class="save-slot__action">${action}</span>
+    `;
+
+    li.append(openBtn);
+
+    if (!meta.empty) {
+      const actions = document.createElement("div");
+      actions.className = "save-slot__actions";
+
+      const resetBtn = document.createElement("button");
+      resetBtn.type = "button";
+      resetBtn.className = "save-slot__reset";
+      resetBtn.dataset.saveReset = String(slot);
+      resetBtn.textContent = "Reset progress";
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "save-slot__delete";
+      deleteBtn.dataset.saveDelete = String(slot);
+      deleteBtn.textContent = "Delete save";
+
+      actions.append(resetBtn, deleteBtn);
+      li.append(actions);
+    }
+
+    list.append(li);
+  }
 }
 
 function renderProfileUi() {
@@ -142,7 +239,6 @@ function renderProfileUi() {
   }
   if (playHint) playHint.hidden = canPlay;
 
-  // Top-left chrome is the primary create/profile control — always on unless playing.
   const onPlay = SCREENS.play && !SCREENS.play.hidden;
   const showChrome = !onPlay;
   if (chrome) {
@@ -207,8 +303,7 @@ function escapeHtml(text) {
 }
 
 function showScreen(name) {
-  // Hard gate: never mount play without an active profile.
-  if (name === "play" && !getActiveProfile()) {
+  if ((name === "play" || name === "saves") && !getActiveProfile()) {
     setFormError("Create a profile name to play.");
     name = "profile";
   }
@@ -220,6 +315,10 @@ function showScreen(name) {
     el.classList.toggle("is-active", active);
   }
 
+  if (name === "saves") {
+    renderSaveSlots();
+  }
+
   if (name === "play") {
     window.IslandFoundry.mount(document.querySelector("#game-root"));
     gameMounted = true;
@@ -228,7 +327,6 @@ function showScreen(name) {
     gameMounted = false;
   }
 
-  // Chrome visibility depends on active profile + current screen.
   renderProfileUi();
 }
 
@@ -243,6 +341,17 @@ function loadSettings() {
 
 function saveSettings(settings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+window.KeaghanSettings = {
+  getVolume() {
+    return loadSettings().volume;
+  },
+};
+
+function playMenuClick() {
+  // Menu-only industrial button press (never used for in-world game clicks).
+  window.KeaghanSfx?.playMenuClick?.();
 }
 
 function applySettingsToUi(settings) {
@@ -277,6 +386,7 @@ function bindProfiles() {
       setFormError(result.error);
       return;
     }
+    playMenuClick();
     setFormError("");
     if (input) input.value = "";
     renderProfileUi();
@@ -285,6 +395,7 @@ function bindProfiles() {
   document.getElementById("profile-list")?.addEventListener("click", (event) => {
     const selectId = event.target.closest("[data-profile-select]")?.dataset.profileSelect;
     if (selectId) {
+      playMenuClick();
       selectProfile(selectId);
       setFormError("");
       renderProfileUi();
@@ -295,11 +406,51 @@ function bindProfiles() {
     if (deleteId) {
       const profile = loadProfiles().profiles.find((p) => p.id === deleteId);
       if (!profile) return;
-      if (!confirm(`Delete profile "${profile.name}" and its save?`)) return;
+      if (!confirm(`Delete profile "${profile.name}" and all its saves?`)) return;
+      playMenuClick();
       deleteProfile(deleteId);
       setFormError("");
       renderProfileUi();
     }
+  });
+}
+
+function bindSaves() {
+  document.getElementById("save-slot-list")?.addEventListener("click", (event) => {
+    const resetSlot = event.target.closest("[data-save-reset]")?.dataset.saveReset;
+    if (resetSlot) {
+      event.stopPropagation();
+      const active = getActiveProfile();
+      if (!active) return;
+      if (!confirm(`Reset progress in slot ${resetSlot}? The world will start over.`)) return;
+      playMenuClick();
+      window.IslandFoundry.resetSlot(active.id, Number(resetSlot));
+      renderSaveSlots();
+      return;
+    }
+
+    const deleteSlot = event.target.closest("[data-save-delete]")?.dataset.saveDelete;
+    if (deleteSlot) {
+      event.stopPropagation();
+      const active = getActiveProfile();
+      if (!active) return;
+      if (!confirm(`Delete save in slot ${deleteSlot}?`)) return;
+      playMenuClick();
+      window.IslandFoundry.clearSlot(active.id, Number(deleteSlot));
+      renderSaveSlots();
+      return;
+    }
+
+    const openSlot = event.target.closest("[data-save-open]")?.dataset.saveOpen;
+    if (!openSlot) return;
+    if (!getActiveProfile()) {
+      setFormError("Create a profile name to play.");
+      showScreen("profile");
+      return;
+    }
+    playMenuClick();
+    activeSlot = Number(openSlot);
+    showScreen("play");
   });
 }
 
@@ -308,7 +459,20 @@ function bindActions() {
     const button = event.target.closest("[data-action]");
     if (!button || button.disabled) return;
 
+    // Skip menu SFX while inside the game world (except leaving via Menu).
+    const onPlay = SCREENS.play && !SCREENS.play.hidden;
     const action = button.dataset.action;
+    const isMenuNav =
+      action === "settings" ||
+      action === "mod" ||
+      action === "profile" ||
+      action === "play" ||
+      action === "back";
+
+    if (isMenuNav && (!onPlay || action === "back")) {
+      playMenuClick();
+    }
+
     if (action === "settings") {
       showScreen("settings");
       return;
@@ -323,6 +487,10 @@ function bindActions() {
       return;
     }
     if (action === "back") {
+      if (onPlay) {
+        showScreen("saves");
+        return;
+      }
       showScreen("title");
       return;
     }
@@ -333,12 +501,13 @@ function bindActions() {
         document.getElementById("profile-name-input")?.focus();
         return;
       }
-      showScreen("play");
+      showScreen("saves");
     }
   });
 }
 
 bindSettings();
 bindProfiles();
+bindSaves();
 bindActions();
 showScreen("title");

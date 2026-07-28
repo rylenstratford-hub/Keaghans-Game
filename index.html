@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Keaghan's Game</title>
+    <title>Satisfactory-Craft</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -24,7 +24,7 @@
       <section id="screen-title" class="screen screen--title is-active" aria-label="Title screen">
         <header class="brand">
           <p class="brand__eyebrow">Craft · Automate · Explore</p>
-          <h1 class="brand__title">Keaghan's Game</h1>
+          <h1 class="brand__title">Satisfactory-Craft</h1>
           <p class="brand__tagline">
             Click to gather. Craft to grow. Build a factory that runs itself.
           </p>
@@ -131,12 +131,28 @@
         </div>
       </section>
 
+      <section id="screen-saves" class="screen screen--panel" hidden aria-label="Save slots">
+        <div class="panel panel--saves">
+          <h2 class="panel__title">Select Save</h2>
+          <p class="panel__copy">
+            Five factory saves for this profile. Pick an empty slot to start fresh, or continue
+            where you left off.
+          </p>
+          <p id="saves-profile-label" class="saves-profile" hidden></p>
+
+          <ol id="save-slot-list" class="save-slots" aria-label="Save slots">
+            <!-- Filled by main.js: 5 parallel rows, left → right -->
+          </ol>
+
+          <button type="button" class="panel__back" data-action="back">Back</button>
+        </div>
+      </section>
+
       <section id="screen-play" class="screen screen--play" hidden aria-label="Game">
         <header class="hud">
           <button type="button" class="hud__menu" data-action="back" aria-label="Return to title">
             ← Menu
           </button>
-          <p class="hud__goal" id="hud-goal">Goal: Chop 5 Wood from trees</p>
           <div class="hud__meta">
             <span id="hud-tool">Hand</span>
             <span id="hud-build">Build: off</span>
@@ -145,35 +161,244 @@
 
         <div class="game-layout" id="game-root">
           <section class="world-panel" aria-label="Island">
-            <div class="world-toolbar">
-              <button type="button" data-game="tool-cycle">Cycle Tool</button>
-              <button type="button" id="btn-build-drill" data-game="build-drill">Place Drill</button>
-              <button type="button" id="btn-build-smelter" data-game="build-smelter">
-                Place Smelter
-              </button>
-              <button type="button" class="danger" data-game="reset">Reset</button>
-            </div>
             <div id="world-grid" class="world-grid" role="grid" aria-label="Resource island"></div>
             <p id="game-toast" class="game-toast" hidden></p>
             <p class="world-help">
-              Click trees &amp; rocks to gather. Craft picks, then a Smelter and Drill. Place drills
-              on ore — they gather for you.
+              <strong>Tab</strong> craft parts · <strong>Q</strong> build with materials (e.g. 4
+              Planks → Crafting Table). Q again exits build mode. Resources regrow at
+              <strong>6:00 a.m.</strong> unless a building covers the node.
             </p>
           </section>
 
           <aside class="side-panels">
-            <section class="side-card" aria-label="Inventory">
-              <h2>Inventory</h2>
-              <ul id="inventory-list" class="inventory-list"></ul>
+            <section class="day-clock" aria-label="Day and night clock">
+              <div class="day-clock__dial" role="img" aria-labelledby="clock-time">
+                <div class="day-clock__ring">
+                  <span class="day-clock__pole day-clock__pole--day">Day</span>
+                  <span class="day-clock__pole day-clock__pole--night">Night</span>
+
+                  <div class="day-clock__mid">
+                    <div class="day-clock__hand-layer" aria-hidden="true">
+                      <div id="clock-hand" class="day-clock__hand">
+                        <span class="day-clock__hand-shaft"></span>
+                        <span class="day-clock__hand-tip"></span>
+                      </div>
+                    </div>
+                    <div class="day-clock__hub" aria-hidden="true"></div>
+                    <div class="day-clock__digital">
+                      <time id="clock-time" class="day-clock__time">6:00 a.m.</time>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </section>
-            <section class="side-card" aria-label="Crafting">
-              <h2>Crafting</h2>
-              <div id="craft-list" class="craft-list"></div>
+
+            <section class="side-card advancements" aria-label="Advancements">
+              <h2>Advancements</h2>
+              <ol id="advancements-list" class="advancements-list"></ol>
             </section>
           </aside>
         </div>
       </section>
     </main>
+
+    <div id="smelter-modal" class="smelter-modal" hidden>
+      <div class="smelter-modal__backdrop" data-smelter-close></div>
+      <div class="smelter-panel" role="dialog" aria-modal="true" aria-labelledby="smelter-title">
+        <header class="smelter-panel__head">
+          <h2 id="smelter-title">Smelter</h2>
+          <button type="button" class="smelter-panel__close" data-smelter-close aria-label="Close">
+            ✕
+          </button>
+        </header>
+
+        <div class="smelter-panel__body">
+          <section class="smelter-col smelter-col--input" aria-label="Input">
+            <h3>Input</h3>
+            <div id="smelter-input-grid" class="smelter-grid smelter-grid--input"></div>
+          </section>
+
+          <section class="smelter-col smelter-col--mid" aria-label="Smelting">
+            <h3>Progress</h3>
+            <div class="smelter-progress">
+              <div id="smelter-progress-bar" class="smelter-progress__bar"></div>
+            </div>
+            <p id="smelter-progress-label" class="smelter-progress__label">No recipe</p>
+            <p id="smelter-progress-time" class="smelter-progress__time">—</p>
+          </section>
+
+          <section class="smelter-col smelter-col--right" aria-label="Output and fuel">
+            <div class="smelter-block">
+              <h3>Output</h3>
+              <div id="smelter-output-grid" class="smelter-grid smelter-grid--out"></div>
+            </div>
+            <div class="smelter-block smelter-block--fuel">
+              <h3>Fuel</h3>
+              <div class="smelter-fuel-row">
+                <div class="smelter-energy" title="Stored heat energy">
+                  <span class="smelter-energy__label">Energy</span>
+                  <div class="smelter-energy__track">
+                    <div id="smelter-energy-bar" class="smelter-energy__bar"></div>
+                  </div>
+                  <span id="smelter-energy-value" class="smelter-energy__value">0</span>
+                </div>
+                <button
+                  type="button"
+                  id="smelter-fuel-slot"
+                  class="smelter-slot"
+                  data-smelter-slot="fuel"
+                  title="Coal fuel input"
+                ></button>
+              </div>
+              <p class="smelter-hint">Log, Planks, or Coal → heat (Log 15, Planks 5, Coal 20). Empty energy resets progress.</p>
+            </div>
+          </section>
+
+          <section class="smelter-col smelter-col--inv" aria-label="Inventory" data-smelter-drop="inv">
+            <h3>Inventory</h3>
+            <div id="smelter-inv-grid" class="smelter-grid smelter-grid--inv"></div>
+            <p class="smelter-hint">Drag ore → input · Drag log/coal → fuel · Drag back to inventory</p>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="player-inv-modal" class="smelter-modal craft-station-modal" hidden>
+      <div class="smelter-modal__backdrop" data-player-inv-close></div>
+      <div
+        class="smelter-panel craft-station-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="player-inv-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="player-inv-title">Inventory</h2>
+          <button
+            type="button"
+            class="smelter-panel__close"
+            data-player-inv-close
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </header>
+
+        <div class="craft-station-body craft-station-body--player">
+          <section class="craft-station-col craft-station-col--list" aria-label="Craftables">
+            <h3>Craftables</h3>
+            <div id="player-inv-list" class="craft-list craft-list--station"></div>
+          </section>
+
+          <section class="craft-station-col craft-station-col--grid" aria-label="Crafting grid">
+            <h3>2×2 Craft</h3>
+            <div class="craft-bench">
+              <div id="player-craft-grid" class="craft-grid craft-grid--2" aria-label="2 by 2 crafting grid"></div>
+              <span class="craft-bench__arrow" aria-hidden="true">→</span>
+              <button
+                type="button"
+                id="player-craft-result"
+                class="smelter-slot craft-result-slot is-empty"
+                disabled
+                title="Crafted result"
+              ></button>
+            </div>
+            <p class="smelter-hint">
+              Click a craftable to arrange materials, click again (or the result) to craft when it
+              matches.
+            </p>
+          </section>
+
+          <section class="craft-station-col craft-station-col--tools" aria-label="Tools">
+            <h3>Tools</h3>
+            <div id="player-tools-grid" class="smelter-grid craft-tools-grid"></div>
+            <p class="smelter-hint">Click a tool to equip it.</p>
+          </section>
+
+          <section class="craft-station-col craft-station-col--inv" aria-label="Inventory">
+            <h3>Inventory</h3>
+            <div id="player-inv-grid" class="smelter-grid craft-inv-grid"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="craft-table-modal" class="smelter-modal craft-station-modal" hidden>
+      <div class="smelter-modal__backdrop" data-craft-table-close></div>
+      <div
+        class="smelter-panel craft-station-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="craft-table-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="craft-table-title">Crafting Table</h2>
+          <button
+            type="button"
+            class="smelter-panel__close"
+            data-craft-table-close
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </header>
+
+        <div class="craft-station-body">
+          <section class="craft-station-col craft-station-col--list" aria-label="Craftables">
+            <h3>Craftables</h3>
+            <div id="craft-table-list" class="craft-list craft-list--station"></div>
+          </section>
+
+          <section class="craft-station-col craft-station-col--grid" aria-label="Crafting grid">
+            <h3>3×3 Craft</h3>
+            <div class="craft-bench">
+              <div id="table-craft-grid" class="craft-grid craft-grid--3" aria-label="3 by 3 crafting grid"></div>
+              <span class="craft-bench__arrow" aria-hidden="true">→</span>
+              <button
+                type="button"
+                id="table-craft-result"
+                class="smelter-slot craft-result-slot is-empty"
+                disabled
+                title="Crafted result"
+              ></button>
+            </div>
+            <p class="smelter-hint">
+              Click a craftable to arrange the 3×3, then take the result. Tab has 2×2 pocket craft.
+            </p>
+          </section>
+
+          <section class="craft-station-col craft-station-col--inv" aria-label="Inventory">
+            <h3>Inventory</h3>
+            <div id="craft-table-inv-grid" class="smelter-grid craft-inv-grid"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="build-modal" class="smelter-modal build-modal" hidden>
+      <div class="smelter-modal__backdrop" data-build-close></div>
+      <div
+        class="smelter-panel build-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="build-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="build-title">Build Structures</h2>
+          <button type="button" class="smelter-panel__close" data-build-close aria-label="Close">
+            ✕
+          </button>
+        </header>
+        <p class="smelter-hint build-hint">
+          Need the listed materials in your inventory, then click a structure and place it on the
+          map (like Satisfactory). Press Q again to leave build mode.
+        </p>
+        <div id="build-grid" class="smelter-grid build-grid" aria-label="Placeable structures"></div>
+        <p id="build-status" class="build-status" aria-live="polite"></p>
+        <div class="build-actions">
+          <button type="button" class="build-action" data-build-pick="demolish">Demolish</button>
+        </div>
+      </div>
+    </div>
 
     <footer class="site-credit">
       This project is supported by the help of Maggoo
@@ -196,6 +421,7 @@
     </div>
 
     <script src="js/data.js" defer></script>
+    <script src="js/sfx.js" defer></script>
     <script src="js/game.js" defer></script>
     <script src="js/main.js" defer></script>
   </body>
