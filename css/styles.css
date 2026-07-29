@@ -781,8 +781,7 @@ input {
   line-height: 1.7;
 }
 
-.panel__back,
-.hud__menu {
+.panel__back {
   appearance: none;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -797,9 +796,7 @@ input {
 }
 
 .panel__back:hover,
-.panel__back:focus-visible,
-.hud__menu:hover,
-.hud__menu:focus-visible {
+.panel__back:focus-visible {
   background: rgba(61, 220, 151, 0.18);
   border-color: rgba(61, 220, 151, 0.6);
   outline: none;
@@ -918,7 +915,6 @@ input {
 }
 
 .tile:hover {
-  transform: translateY(-1px) scale(1.03);
   border-color: rgba(61, 220, 151, 0.55);
   z-index: 1;
 }
@@ -1178,6 +1174,21 @@ input {
 
 .smelter-slot.is-empty {
   opacity: 0.55;
+}
+
+.smelter-slot.is-missing {
+  opacity: 1;
+  border-color: #ff5a4a;
+  box-shadow:
+    0 0 0 1px rgba(255, 90, 74, 0.55),
+    inset 0 0 12px rgba(255, 40, 30, 0.18);
+  background: rgba(20, 10, 10, 0.72);
+  cursor: pointer;
+}
+
+.smelter-slot.is-missing .smelter-slot__icon {
+  opacity: 0.35;
+  filter: grayscale(1) brightness(0.55);
 }
 
 .smelter-slot[draggable="true"] {
@@ -1685,6 +1696,22 @@ input {
   display: grid;
   place-items: center;
   padding-bottom: 1.35rem;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #f2f5f1;
+  opacity: 1;
+}
+
+.build-slot:hover,
+.build-slot:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(240, 180, 41, 0.55);
+  outline: none;
+}
+
+.build-slot .smelter-slot__icon {
+  filter: none;
+  opacity: 1;
 }
 
 .build-slot__name {
@@ -1695,7 +1722,7 @@ input {
   font-size: 0.62rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: #e8efe9;
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
@@ -1708,8 +1735,17 @@ input {
   right: 0.3rem;
   font-size: 0.58rem;
   font-weight: 700;
-  color: var(--accent);
+  color: #ffe7a3;
   letter-spacing: 0.02em;
+}
+
+.build-slot__hotkey {
+  position: absolute;
+  top: 0.25rem;
+  left: 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #c5d9ff;
 }
 
 .build-slot.is-empty .build-slot__cost {
@@ -1717,7 +1753,12 @@ input {
 }
 
 .build-slot.is-empty {
-  cursor: not-allowed;
+  cursor: pointer;
+  opacity: 1 !important;
+}
+
+.build-slot.is-empty .build-slot__name {
+  color: #c5d0c8;
 }
 
 .build-status {
@@ -1731,41 +1772,58 @@ input {
   color: #ffb4a8;
 }
 
-.build-slot.is-selected,
-.build-action.is-selected {
+.build-slot.is-selected {
   border-color: rgba(240, 180, 41, 0.85);
   box-shadow: 0 0 12px rgba(240, 180, 41, 0.35);
-  background: rgba(240, 180, 41, 0.12);
+  background: rgba(240, 180, 41, 0.14);
 }
 
-.build-actions {
+.pause-panel {
+  width: min(420px, 100%);
+  max-height: none;
+  text-align: center;
+}
+
+.pause-hint {
+  margin: 0 0 1.25rem;
+}
+
+.pause-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 1rem;
+  flex-direction: column;
+  gap: 0.65rem;
 }
 
-.build-action {
+.pause-btn {
   appearance: none;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--ink);
-  border-radius: 10px;
-  padding: 0.55rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   cursor: pointer;
-  font-weight: 600;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.05);
 }
 
-.build-action:hover,
-.build-action:focus-visible {
-  border-color: rgba(126, 200, 255, 0.55);
+.pause-btn--resume {
+  border-color: rgba(61, 220, 151, 0.55);
+  background: rgba(61, 220, 151, 0.12);
+  color: #b8ffd9;
+}
+
+.pause-btn--leave {
+  border-color: rgba(255, 120, 100, 0.45);
+  background: rgba(255, 80, 60, 0.1);
+  color: #ffc4b8;
+}
+
+.pause-btn:hover,
+.pause-btn:focus-visible {
   outline: none;
-}
-
-.build-action--danger {
-  color: #ffb4b4;
-  border-color: rgba(255, 120, 120, 0.35);
-  margin-left: auto;
+  filter: brightness(1.12);
 }
 
 @media (max-width: 800px) {
@@ -1803,6 +1861,11 @@ input {
 .craft-btn.is-ready {
   border-color: rgba(61, 220, 151, 0.45);
   background: rgba(61, 220, 151, 0.1);
+}
+
+.craft-btn.is-incomplete {
+  border-color: rgba(255, 140, 120, 0.35);
+  background: rgba(255, 80, 60, 0.06);
 }
 
 .craft-btn:disabled {

@@ -420,6 +420,476 @@ window.KeaghanSfx = (() => {
     }
   }
 
+  /**
+   * In-game music — melodic factory / exploration theme (original Web Audio).
+   * Mid/high register melody + soft chords; avoids low rumble beds.
+   */
+  const MUSIC_LEVEL = 0.22;
+  let music = {
+    playing: false,
+    paused: false,
+    bus: null,
+    oscillators: [],
+    nodes: [],
+    timer: 0,
+    beat: 0,
+  };
+
+  // Soft drums / piano fade in after you keep playing (bars ≈ 3.4s each).
+  const DRUMS_HATS_AFTER = 8; // ~27s
+  const DRUMS_KICK_AFTER = 16; // ~54s
+  const DRUMS_FULL_AFTER = 24; // ~82s
+  const PIANO_AFTER = 30; // ~100s
+  const CYMBAL_AFTER = 35; // ~120s
+
+  const MUSIC_ROOT = 220;
+  const MUSIC_SCALE = [0, 2, 3, 5, 7, 8, 10, 12, 14, 15, 17, 19, 20, 22, 24];
+
+  function musicTargetGain() {
+    return Math.max(0.0001, masterGain() * MUSIC_LEVEL);
+  }
+
+  function musicFreq(degree, octave = 0) {
+    const idx = ((degree % MUSIC_SCALE.length) + MUSIC_SCALE.length) % MUSIC_SCALE.length;
+    return MUSIC_ROOT * Math.pow(2, (MUSIC_SCALE[idx] + octave * 12) / 12);
+  }
+
+  function stopOscList(list) {
+    for (const osc of list) {
+      try {
+        osc.stop();
+      } catch {
+        /* already stopped */
+      }
+      try {
+        osc.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }
+    list.length = 0;
+  }
+
+  function clearMusicTimer() {
+    if (music.timer) {
+      window.clearInterval(music.timer);
+      music.timer = 0;
+    }
+  }
+
+  function refreshVolumes() {
+    if (!ctx || !music.bus) return;
+    const now = ctx.currentTime;
+    const target = music.paused ? 0.0001 : musicTargetGain();
+    music.bus.gain.cancelScheduledValues(now);
+    music.bus.gain.setTargetAtTime(target, now, 0.08);
+  }
+
+  function playTone(audio, bus, { freq, when, dur, peak, type = "triangle", filterFreq = 2400 }) {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    const filter = audio.createBiquadFilter();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, when);
+    filter.type = "lowpass";
+    filter.frequency.value = filterFreq;
+    filter.Q.value = 0.8;
+    gain.gain.setValueAtTime(0.0001, when);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), when + Math.min(0.08, dur * 0.2));
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(bus);
+    osc.start(when);
+    osc.stop(when + dur + 0.03);
+  }
+
+  function playChord(audio, bus, degrees, when, dur, peak = 0.04) {
+    for (const deg of degrees) {
+      playTone(audio, bus, {
+        freq: musicFreq(deg, 0),
+        when,
+        dur,
+        peak: peak * 0.7,
+        type: "sine",
+        filterFreq: 1600,
+      });
+      playTone(audio, bus, {
+        freq: musicFreq(deg, 1),
+        when: when + 0.01,
+        dur: dur * 0.95,
+        peak: peak * 0.35,
+        type: "triangle",
+        filterFreq: 2200,
+      });
+    }
+  }
+
+  function playKick(audio, bus, when, peak = 0.14) {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    const filter = audio.createBiquadFilter();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(150, when);
+    osc.frequency.exponentialRampToValueAtTime(58, when + 0.14);
+    filter.type = "lowpass";
+    filter.frequency.value = 280;
+    gain.gain.setValueAtTime(0.0001, when);
+    gain.gain.exponentialRampToValueAtTime(peak, when + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.2);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(bus);
+    osc.start(when);
+    osc.stop(when + 0.22);
+  }
+
+  function playSnare(audio, bus, when, peak = 0.1) {
+    const delay = Math.max(0, when - audio.currentTime);
+    playNoise(audio, bus, {
+      seconds: 0.09,
+      freq: 1600,
+      q: 1.1,
+      gain: peak,
+      type: "bandpass",
+      delay,
+      crackle: true,
+    });
+    playTone(audio, bus, {
+      freq: 220,
+      when,
+      dur: 0.1,
+      peak: peak * 0.45,
+      type: "triangle",
+      filterFreq: 900,
+    });
+  }
+
+  function playHat(audio, bus, when, peak = 0.045, open = false) {
+    const delay = Math.max(0, when - audio.currentTime);
+    playNoise(audio, bus, {
+      seconds: open ? 0.14 : 0.045,
+      freq: open ? 7000 : 9000,
+      q: open ? 0.6 : 1.4,
+      gain: peak,
+      type: "highpass",
+      delay,
+    });
+  }
+
+  /** Soft piano-ish key: quick hammer attack + longer harmonic decay. */
+  function playPianoNote(audio, bus, freq, when, dur = 1.4, peak = 0.08) {
+    const partials = [
+      { mul: 1, gain: 1, type: "sine" },
+      { mul: 2, gain: 0.45, type: "triangle" },
+      { mul: 3, gain: 0.18, type: "sine" },
+      { mul: 4, gain: 0.08, type: "sine" },
+    ];
+    for (const partial of partials) {
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      const filter = audio.createBiquadFilter();
+      osc.type = partial.type;
+      osc.frequency.setValueAtTime(freq * partial.mul, when);
+      // Tiny hammer inharmonicity
+      osc.detune.setValueAtTime(partial.mul > 1 ? partial.mul * 1.5 : 0, when);
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(4200, when);
+      filter.frequency.exponentialRampToValueAtTime(900, when + dur);
+      const level = peak * partial.gain;
+      gain.gain.setValueAtTime(0.0001, when);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.001, level), when + 0.012);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.001, level * 0.35), when + 0.28);
+      gain.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(bus);
+      osc.start(when);
+      osc.stop(when + dur + 0.05);
+    }
+  }
+
+  function schedulePiano(audio, bus, barStart, totalBars, bar) {
+    if (totalBars < PIANO_AFTER) return;
+
+    const phrases = [
+      [0, 2, 4, 7, 4, 2, 0, 2],
+      [4, 5, 7, 9, 7, 5, 4, 0],
+      [2, 4, 5, 7, 5, 4, 2, 4],
+      [7, 5, 4, 2, 0, 2, 4, 5],
+      [0, 4, 7, 9, 7, 4, 2, 0],
+      [5, 4, 2, 4, 5, 7, 5, 4],
+      [4, 2, 0, 2, 4, 5, 7, 9],
+      [2, 0, 2, 4, 5, 4, 2, 0],
+    ];
+    const phrase = phrases[bar % phrases.length];
+
+    // Left-hand soft octaves on the downbeats
+    const bassDeg = [0, 0, 3, 3, 4, 4, 0, 7][bar % 8];
+    playPianoNote(audio, bus, musicFreq(bassDeg, 0), barStart, 2.2, 0.055);
+    playPianoNote(audio, bus, musicFreq(bassDeg, 1), barStart + 0.02, 2.0, 0.03);
+
+    // Right-hand melody
+    phrase.forEach((deg, i) => {
+      const t = barStart + 0.18 + i * 0.4;
+      playPianoNote(audio, bus, musicFreq(deg, 2), t, 0.95, 0.085);
+    });
+  }
+
+  /** Bright sustained cymbal crash (noise wash). */
+  function playCymbalCrash(audio, bus, when, peak = 0.12) {
+    const delay = Math.max(0, when - audio.currentTime);
+    // Main shimmer wash
+    playNoise(audio, bus, {
+      seconds: 1.8,
+      freq: 6500,
+      q: 0.35,
+      gain: peak,
+      type: "highpass",
+      delay,
+      crackle: true,
+    });
+    // Mid metallic body
+    playNoise(audio, bus, {
+      seconds: 1.2,
+      freq: 2800,
+      q: 0.55,
+      gain: peak * 0.55,
+      type: "bandpass",
+      delay: delay + 0.01,
+      crackle: true,
+    });
+    // Soft low sizzle bed
+    playNoise(audio, bus, {
+      seconds: 2.2,
+      freq: 4200,
+      q: 0.4,
+      gain: peak * 0.35,
+      type: "bandpass",
+      delay: delay + 0.03,
+    });
+  }
+
+  function scheduleCymbals(audio, bus, barStart, totalBars, bar) {
+    if (totalBars < CYMBAL_AFTER) return;
+
+    // Crash on the downbeat of every other bar; bigger hit every 4 bars
+    if (bar % 2 === 0) {
+      const big = bar % 4 === 0;
+      playCymbalCrash(audio, bus, barStart, big ? 0.14 : 0.09);
+    }
+    // Occasional splash on the “and” of beat 3 once the kit is fully rolling
+    if (bar % 4 === 3) {
+      playCymbalCrash(audio, bus, barStart + 0.425 * 5, 0.07);
+    }
+  }
+
+  /** Drums layer in the longer you stay in-game. */
+  function scheduleDrums(audio, bus, barStart, totalBars) {
+    if (totalBars < DRUMS_HATS_AFTER) return;
+
+    const step = 0.425; // 8th notes inside the ~3.4s bar
+    const hatPeak = totalBars >= DRUMS_FULL_AFTER ? 0.055 : 0.035;
+
+    // Closed hats
+    for (let i = 0; i < 8; i++) {
+      const open = totalBars >= DRUMS_FULL_AFTER && i === 7;
+      playHat(audio, bus, barStart + i * step, open ? hatPeak * 1.15 : hatPeak, open);
+    }
+
+    if (totalBars < DRUMS_KICK_AFTER) return;
+
+    // Kick on beats 1 & 3 (and later also the “and” of 2)
+    playKick(audio, bus, barStart, 0.15);
+    playKick(audio, bus, barStart + step * 4, 0.13);
+    if (totalBars >= DRUMS_FULL_AFTER) {
+      playKick(audio, bus, barStart + step * 6, 0.09);
+    }
+
+    if (totalBars < DRUMS_FULL_AFTER) return;
+
+    // Snare on 2 & 4
+    playSnare(audio, bus, barStart + step * 2, 0.11);
+    playSnare(audio, bus, barStart + step * 6, 0.1);
+  }
+
+  /** One musical bar: chord + arpeggio + lead motif (+ drums after you continue). */
+  function scheduleMusicBar() {
+    if (!music.playing || music.paused || !ctx || !music.bus) return;
+    const audio = ctx;
+    const now = audio.currentTime + 0.04;
+    const totalBars = music.beat;
+    const bar = music.beat % 8;
+    music.beat += 1;
+
+    const chords = [
+      [0, 2, 4],
+      [0, 2, 4],
+      [3, 5, 7],
+      [3, 5, 7],
+      [4, 6, 8],
+      [4, 6, 8],
+      [0, 2, 5],
+      [7, 4, 2],
+    ];
+    const chord = chords[bar];
+    playChord(audio, music.bus, chord, now, 3.4, 0.055);
+
+    const arp = [chord[0], chord[1], chord[2], chord[1] + 7, chord[2], chord[0] + 7];
+    arp.forEach((deg, i) => {
+      playTone(audio, music.bus, {
+        freq: musicFreq(deg, 1),
+        when: now + 0.15 + i * 0.42,
+        dur: 0.55,
+        peak: 0.07,
+        type: "triangle",
+        filterFreq: 3200,
+      });
+    });
+
+    const leads = [
+      [4, 5, 7, 5, 4, 2, 0, 2],
+      [7, 5, 4, 5, 7, 9, 7, 5],
+      [5, 4, 2, 4, 5, 7, 8, 7],
+      [2, 4, 5, 7, 5, 4, 2, 0],
+      [7, 8, 7, 5, 4, 5, 2, 4],
+      [4, 2, 0, 2, 4, 5, 7, 4],
+      [5, 7, 9, 7, 5, 4, 2, 0],
+      [0, 2, 4, 5, 4, 2, 4, 0],
+    ];
+    leads[bar].forEach((deg, i) => {
+      const t = now + 0.2 + i * 0.38;
+      playTone(audio, music.bus, {
+        freq: musicFreq(deg, 2),
+        when: t,
+        dur: 0.5,
+        peak: 0.09,
+        type: "sine",
+        filterFreq: 3800,
+      });
+      playTone(audio, music.bus, {
+        freq: musicFreq(deg, 3),
+        when: t + 0.02,
+        dur: 0.28,
+        peak: 0.03,
+        type: "triangle",
+        filterFreq: 5000,
+      });
+    });
+
+    // Soft pulse only before the drum kit arrives
+    if (totalBars < DRUMS_HATS_AFTER) {
+      for (let i = 0; i < 4; i++) {
+        playTone(audio, music.bus, {
+          freq: 330,
+          when: now + i * 0.85,
+          dur: 0.12,
+          peak: 0.025,
+          type: "sine",
+          filterFreq: 700,
+        });
+      }
+    }
+
+    scheduleDrums(audio, music.bus, now, totalBars);
+    schedulePiano(audio, music.bus, now, totalBars, bar);
+    scheduleCymbals(audio, music.bus, now, totalBars, bar);
+  }
+
+  function startMusic() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    if (music.playing) {
+      music.paused = false;
+      refreshVolumes();
+      return;
+    }
+
+    music.playing = true;
+    music.paused = false;
+    music.beat = 0;
+    music.bus = audio.createGain();
+    music.bus.gain.value = 0.0001;
+    music.bus.connect(audio.destination);
+    music.bus.gain.linearRampToValueAtTime(musicTargetGain(), audio.currentTime + 1.2);
+
+    const air = audio.createOscillator();
+    const airGain = audio.createGain();
+    const airFilter = audio.createBiquadFilter();
+    air.type = "sine";
+    air.frequency.value = 880;
+    airFilter.type = "bandpass";
+    airFilter.frequency.value = 2400;
+    airFilter.Q.value = 0.5;
+    airGain.gain.value = 0.015;
+    air.connect(airFilter);
+    airFilter.connect(airGain);
+    airGain.connect(music.bus);
+    air.start();
+    music.oscillators.push(air);
+    music.nodes.push(airGain, airFilter);
+
+    scheduleMusicBar();
+    clearMusicTimer();
+    music.timer = window.setInterval(() => {
+      if (!music.playing || music.paused) return;
+      scheduleMusicBar();
+    }, 3400);
+  }
+
+  function pauseMusic() {
+    if (!music.playing) return;
+    music.paused = true;
+    refreshVolumes();
+  }
+
+  function resumeMusic() {
+    if (!music.playing) {
+      startMusic();
+      return;
+    }
+    music.paused = false;
+    refreshVolumes();
+  }
+
+  function stopMusic() {
+    clearMusicTimer();
+    if (ctx && music.bus) {
+      const now = ctx.currentTime;
+      try {
+        music.bus.gain.cancelScheduledValues(now);
+        music.bus.gain.setTargetAtTime(0.0001, now, 0.15);
+      } catch {
+        /* ignore */
+      }
+    }
+    const bus = music.bus;
+    const oscs = music.oscillators.slice();
+    const extras = music.nodes.slice();
+    music.playing = false;
+    music.paused = false;
+    music.bus = null;
+    music.oscillators = [];
+    music.nodes = [];
+    music.beat = 0;
+
+    window.setTimeout(() => {
+      stopOscList(oscs);
+      for (const node of extras) {
+        try {
+          node.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        bus?.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }, 600);
+  }
+
   return {
     playMenuClick,
     playTreeRustle,
@@ -428,6 +898,11 @@ window.KeaghanSfx = (() => {
     playRockBreak,
     playOreDetune,
     playHarvest,
+    startMusic,
+    stopMusic,
+    pauseMusic,
+    resumeMusic,
+    refreshVolumes,
     ensureCtx,
   };
 })();

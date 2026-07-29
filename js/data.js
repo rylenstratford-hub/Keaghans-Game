@@ -16,8 +16,18 @@ window.GameData = {
     smelter: { id: "smelter", name: "Smelter", icon: "🔥", color: "#e29a3a" },
     gear: { id: "gear", name: "Gear", icon: "⚙️", color: "#9db0bf" },
     generator: { id: "generator", name: "Coal Generator", icon: "⚡", color: "#f0b429" },
-    copperWire: { id: "copperWire", name: "Copper Wire", icon: "〰️", color: "#c9854a" },
-    cable: { id: "cable", name: "Cable", icon: "━", color: "#4a6a8a" },
+    copperWire: {
+      id: "copperWire",
+      name: "Copper Wire",
+      icon: "〰️",
+      color: "#c9854a",
+    },
+    cable: {
+      id: "cable",
+      name: "Cable",
+      icon: "━",
+      color: "#4a6a8a",
+    },
     powerPole: { id: "powerPole", name: "Power Pole", icon: "🗼", color: "#7ec8ff" },
     craftingStation: {
       id: "craftingStation",
@@ -32,18 +42,27 @@ window.GameData = {
   },
 
   nodeTypes: {
-    tree: { resource: "log", label: "Tree", hp: 3, yield: 1 },
-    rock: { resource: "stone", label: "Rock", hp: 4, yield: 1 },
-    coal: { resource: "coal", label: "Coal", hp: 5, yield: 1 },
-    iron: { resource: "ironOre", label: "Iron", hp: 6, yield: 1 },
-    copper: { resource: "copperOre", label: "Copper", hp: 6, yield: 1 },
+    tree: { resource: "log", label: "Tree", hp: 3, yield: 1, minTool: "hand" },
+    rock: { resource: "stone", label: "Rock", hp: 3, yield: 1, minTool: "woodPick" },
+    coal: { resource: "coal", label: "Coal", hp: 3, yield: 1, minTool: "woodPick" },
+    iron: { resource: "ironOre", label: "Iron", hp: 3, yield: 1, minTool: "stonePick" },
+    copper: { resource: "copperOre", label: "Copper", hp: 3, yield: 1, minTool: "stonePick" },
   },
 
+  /** Higher number = stronger tool. */
+  toolTier: {
+    hand: 0,
+    woodPick: 1,
+    stonePick: 2,
+    ironPick: 3,
+  },
+
+  /** Base strike power; harvestDamage() applies node bonuses for stone/iron picks. */
   tools: {
     hand: { power: 1, yieldBonus: 0 },
-    woodPick: { power: 2, yieldBonus: 0 },
-    stonePick: { power: 3, yieldBonus: 1 },
-    ironPick: { power: 4, yieldBonus: 1 },
+    woodPick: { power: 1, yieldBonus: 0 },
+    stonePick: { power: 1, yieldBonus: 0 },
+    ironPick: { power: 1, yieldBonus: 0 },
   },
 
   recipes: [
@@ -76,11 +95,21 @@ window.GameData = {
       id: "stonePick",
       name: "Stone Pick",
       output: { id: "stonePick", count: 1 },
-      cost: { stone: 3, stick: 2 },
+      // Wood pick in the center, stone filling every other cell.
+      cost: { stone: 8, woodPick: 1 },
       unlocksTool: "stonePick",
-      requires: ["woodPick"],
       atStation: true,
-      layout: ["stone", "stone", "stone", null, "stick", null, null, "stick", null],
+      layout: [
+        "stone",
+        "stone",
+        "stone",
+        "stone",
+        "woodPick",
+        "stone",
+        "stone",
+        "stone",
+        "stone",
+      ],
     },
     {
       id: "gear",
@@ -94,11 +123,21 @@ window.GameData = {
       id: "ironPick",
       name: "Iron Pick",
       output: { id: "ironPick", count: 1 },
-      cost: { ironIngot: 3, stick: 2 },
+      // Stone pick in the center, iron ingots all around.
+      cost: { ironIngot: 8, stonePick: 1 },
       unlocksTool: "ironPick",
-      requires: ["stonePick"],
       atStation: true,
-      layout: ["ironIngot", "ironIngot", "ironIngot", null, "stick", null, null, "stick", null],
+      layout: [
+        "ironIngot",
+        "ironIngot",
+        "ironIngot",
+        "ironIngot",
+        "stonePick",
+        "ironIngot",
+        "ironIngot",
+        "ironIngot",
+        "ironIngot",
+      ],
     },
     {
       id: "copperWire",
@@ -121,6 +160,7 @@ window.GameData = {
   /**
    * Satisfactory-style construction: Q-build spends these materials on place.
    * Craft components (planks, cable, gears…), then build structures from them.
+   * Copper Wire is NOT power cable — craft Cable first, then place Cable.
    */
   buildCosts: {
     craftingStation: { plank: 4 },
@@ -128,6 +168,7 @@ window.GameData = {
     drill: { ironIngot: 4, gear: 2, copperIngot: 2 },
     generator: { ironIngot: 5, copperIngot: 3, stone: 6, cable: 2 },
     powerPole: { ironIngot: 1, cable: 1 },
+    // Explicit: only the Cable item. Never copperWire.
     cable: { cable: 1 },
   },
 

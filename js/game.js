@@ -505,10 +505,38 @@ window.IslandFoundry = (() => {
   }
 
   /** Arrow points: 6am left, noon up, 6pm right, midnight down. */
-  function clockHandDegrees(worldMinutes) {
+  function clockHandBaseDegrees(worldMinutes) {
     const total = ((Math.floor(worldMinutes) % (24 * 60)) + 24 * 60) % (24 * 60);
     // Hand graphic points UP at rotate(0). Midnight is down → +180°.
     return (total / (24 * 60)) * 360 + 180;
+  }
+
+  // Continuous hand angle so midnight doesn't wrap 540°→180° (CSS would spin CCW).
+  let clockHandDegreesLive = null;
+  let clockHandLastMinutes = null;
+
+  function clockHandDegrees(worldMinutes) {
+    const day = 24 * 60;
+    const total = ((Math.floor(worldMinutes) % day) + day) % day;
+    const base = clockHandBaseDegrees(total);
+
+    if (clockHandDegreesLive == null || clockHandLastMinutes == null) {
+      clockHandDegreesLive = base;
+      clockHandLastMinutes = total;
+      return clockHandDegreesLive;
+    }
+
+    let deltaMin = total - clockHandLastMinutes;
+    if (deltaMin < -day / 2) deltaMin += day; // crossed midnight forward
+    if (deltaMin > day / 2) deltaMin -= day; // rare backward jump
+    clockHandDegreesLive += (deltaMin / day) * 360;
+    clockHandLastMinutes = total;
+    return clockHandDegreesLive;
+  }
+
+  function resetClockHandTracking() {
+    clockHandDegreesLive = null;
+    clockHandLastMinutes = null;
   }
 
   function renderClock() {
@@ -530,6 +558,42 @@ window.IslandFoundry = (() => {
     setToast(state, labelHint ? `${labelHint} · +${amount} ${name}` : `+${amount} ${name}`);
   }
 
+  function toolTiersMeet(activeToolId, minToolId) {
+    const tiers = GameData.toolTier || {};
+    const have = tiers[activeToolId || "hand"] ?? 0;
+    const need = tiers[minToolId || "hand"] ?? 0;
+    return have >= need;
+  }
+
+  /**
+   * All tools deal 1 damage by default.
+   * Stone pick: 2 vs rock/coal.
+   * Iron pick: 3 vs rock/coal, 2 vs iron/copper.
+   */
+  function harvestDamage(toolId, nodeType) {
+    const soft = nodeType === "rock" || nodeType === "coal";
+    const hard = nodeType === "iron" || nodeType === "copper";
+    if (toolId === "ironPick") {
+      if (soft) return 3;
+      if (hard) return 2;
+      return 1;
+    }
+    if (toolId === "stonePick" && soft) return 2;
+    return 1;
+  }
+
+  /** Keep saved nodes on the 3-hit scale after balance changes. */
+  function normalizeNodeHitPoints(gameState) {
+    if (!gameState?.tiles) return;
+    for (const tile of gameState.tiles) {
+      if (!tile.node) continue;
+      const def = GameData.nodeTypes[tile.node];
+      if (!def) continue;
+      tile.maxHp = def.hp;
+      if (tile.hp > 0) tile.hp = Math.min(tile.hp, def.hp);
+    }
+  }
+
   function harvestTile(state, tile) {
     if (!tile.node || tile.machine) return false;
     // Broken-down / depleted nodes give nothing until they respawn.
@@ -539,10 +603,16 @@ window.IslandFoundry = (() => {
     }
 
     const def = GameData.nodeTypes[tile.node];
-    const toolId = state.activeTool;
-    const tool = GameData.tools[toolId] || GameData.tools.hand;
+    const toolId = state.activeTool || "hand";
+    const minTool = def.minTool || "hand";
+    if (!toolTiersMeet(toolId, minTool)) {
+      const needName = minTool === "hand" ? "your hands" : GameData.getItem(minTool).name;
+      setToast(state, `Need ${needName} to mine ${def.label}`);
+      return false;
+    }
+
     const nodeType = tile.node;
-    tile.hp -= tool.power;
+    tile.hp -= harvestDamage(toolId, nodeType);
 
     if (tile.hp > 0) {
       window.KeaghanSfx?.playHarvest?.(nodeType, false);
@@ -564,14 +634,6 @@ window.IslandFoundry = (() => {
     if (recipe.atStation && !fromStation) {
       setToast(state, "Open a Crafting Table to make that");
       return false;
-    }
-    if (recipe.requires?.some((r) => !state.unlockedTools.includes(r) && (state.inventory[r] || 0) < 1)) {
-      // require prior tool unlocks when listed as tool ids
-      const missing = recipe.requires.filter((r) => !state.unlockedTools.includes(r));
-      if (missing.length) {
-        setToast(state, "Craft earlier tools first");
-        return false;
-      }
     }
     if (!canAfford(state, recipe.cost)) {
       setToast(state, "Need more materials");
@@ -610,13 +672,13 @@ window.IslandFoundry = (() => {
     "cable",
   ];
   const BUILD_HINTS = {
-    craftingStation: "Click a tile to build — costs 4 Planks",
-    smelter: "Click a tile to build — costs Stone + Coal",
-    drill: "Place on a resource node — costs Ingots + Gears",
-    generator: "Click a tile to build — needs Coal afterward for power",
-    powerPole: "Click to build — costs Iron Ingot + Cable",
-    cable: "Click to lay cable — costs 1 Cable each",
-    demolish: "Click a building to demolish (refunds materials)",
+    craftingStation: "Click empty grass to build — costs 4 Planks (not on trees/ores)",
+    smelter: "Click empty grass to build — costs Stone + Coal",
+    drill: "Place on a resource node (ore/coal/rock/tree) — then power it",
+    generator: "Click empty grass to build — needs Coal afterward for power",
+    powerPole: "Click empty grass — costs Iron Ingot + Cable",
+    cable: "Click empty grass — costs 1 Cable (Copper Wire is not power cable)",
+    demolish: "Demolish locked (F) — click buildings to remove. F or a menu to exit.",
   };
 
   function getBuildCost(type) {
@@ -631,6 +693,22 @@ window.IslandFoundry = (() => {
 
   function canBuildStructure(state, type) {
     return canAfford(state, getBuildCost(type));
+  }
+
+  /** Clear grass only — trees / rocks / ores stay free. Drills must sit on a resource node. */
+  function canPlaceOnTile(type, tile) {
+    if (!tile || tile.machine) return { ok: false, reason: "Tile occupied" };
+    if (type === "drill") {
+      if (!tile.node) {
+        return { ok: false, reason: "Drills must be placed on a resource node" };
+      }
+      return { ok: true };
+    }
+    if (tile.node) {
+      const label = GameData.nodeTypes[tile.node]?.label || "resource";
+      return { ok: false, reason: `Can't build on ${label} — clear grass only` };
+    }
+    return { ok: true };
   }
 
   function tileKey(x, y) {
@@ -913,11 +991,17 @@ window.IslandFoundry = (() => {
   }
 
   function placeMachine(state, tile, type) {
-    if (tile.machine) {
-      setToast(state, "Tile occupied");
+    if (!PLACEABLE.includes(type)) return false;
+    // Power lines require crafted Cable — Copper Wire is only a crafting ingredient.
+    if (type === "cable" && (state.inventory.cable || 0) < 1) {
+      setToast(state, "Need Cable — craft it from Copper Wire at a Crafting Table");
       return false;
     }
-    if (!PLACEABLE.includes(type)) return false;
+    const spot = canPlaceOnTile(type, tile);
+    if (!spot.ok) {
+      setToast(state, spot.reason);
+      return false;
+    }
     const cost = getBuildCost(type);
     if (!canAfford(state, cost)) {
       setToast(state, `Need ${formatCost(cost)}`);
@@ -1062,11 +1146,17 @@ window.IslandFoundry = (() => {
   }
 
   function updateGoals(state) {
+    let changed = false;
     for (const goal of GameData.goals) {
       if (!state.goalsDone[goal.id] && goal.check(state)) {
         state.goalsDone[goal.id] = true;
         setToast(state, `Goal complete: ${goal.text}`);
+        changed = true;
       }
+    }
+    if (changed) {
+      advancementsSig = "";
+      renderAdvancements();
     }
   }
 
@@ -1086,6 +1176,8 @@ window.IslandFoundry = (() => {
   let openPlayerInv = false;
   let openCraftTable = null; // { x, y } of open crafting table
   let openBuildMenu = false;
+  let gamePaused = false;
+  let advancementsSig = "";
   let playerCraftGrid = [null, null, null, null];
   let craftDrag = null;
   let smelterDrag = null; // { from, itemId, count, outIndex? }
@@ -1382,8 +1474,33 @@ window.IslandFoundry = (() => {
     return ensureSmelterShape(m);
   }
 
+  function clearBuildMode(toastMsg = null) {
+    if (!state || !state.buildMode) return;
+    state.buildMode = null;
+    if (toastMsg) setToast(state, toastMsg);
+  }
+
+  function toggleDemolishMode() {
+    if (!state || !playActive) return;
+    closeSmelterUi();
+    closePlayerInvUi();
+    closeCraftTableUi();
+    closeBuildUi();
+
+    if (state.buildMode === "demolish") {
+      state.buildMode = null;
+      setToast(state, "Demolish mode off");
+    } else {
+      state.buildMode = "demolish";
+      setToast(state, "Demolish locked (F) — click buildings to remove. F or a menu to exit.");
+    }
+    renderHud();
+    saveState(state);
+  }
+
   function openSmelterUi(x, y) {
     if (!state) return;
+    clearBuildMode();
     closePlayerInvUi();
     closeCraftTableUi();
     closeBuildUi();
@@ -1424,8 +1541,6 @@ window.IslandFoundry = (() => {
     return recipes
       .map((recipe) => {
         const ok = canAfford(state, recipe.cost);
-        const locked =
-          recipe.requires?.some((r) => !state.unlockedTools.includes(r)) ?? false;
         const cost = Object.entries(recipe.cost)
           .map(([id, n]) => `${n} ${GameData.getItem(id).name}`)
           .join(", ");
@@ -1433,11 +1548,13 @@ window.IslandFoundry = (() => {
         const attr =
           dataAttr || (fromStation ? `data-station-craft="${recipe.id}"` : `data-craft="${recipe.id}"`);
         const fullAttr = dataAttr ? `${dataAttr}="${recipe.id}"` : attr;
-        return `<button type="button" class="craft-btn ${ok && !locked ? "is-ready" : ""}" ${fullAttr} ${locked ? "disabled" : ""}>
+        const tier = fromStation ? (recipe.atStation ? "Advanced · " : "Basic · ") : "";
+        const stateClass = ok ? "is-ready" : "is-incomplete";
+        return `<button type="button" class="craft-btn ${stateClass}" ${fullAttr} title="${ok ? "Click to arrange" : "Click to arrange what you have"}">
           <span class="craft-btn__icon">${out.icon}</span>
           <span class="craft-btn__body">
             <strong>${recipe.name}</strong>
-            <small>${locked ? "Locked — craft earlier tools" : cost}</small>
+            <small>${tier}${cost}${ok ? "" : " · missing parts"}</small>
           </span>
           <span class="craft-btn__out">×${recipe.output.count}</span>
         </button>`;
@@ -1449,21 +1566,44 @@ window.IslandFoundry = (() => {
     return GameData.recipes.filter((r) => !r.atStation);
   }
 
+  /** Crafting Table: basic (pocket) + advanced (station) recipes. */
   function tableRecipes() {
-    return GameData.recipes.filter((r) => r.atStation);
+    return GameData.recipes.slice();
+  }
+
+  /** Map a recipe layout onto the active bench size (2×2 → top-left of 3×3). */
+  function layoutForBench(recipe, benchSize) {
+    const layout = Array.isArray(recipe.layout) ? recipe.layout : [];
+    if (layout.length === benchSize) return layout;
+    if (benchSize === 9 && layout.length === 4) {
+      const out = Array(9).fill(null);
+      out[0] = layout[0];
+      out[1] = layout[1];
+      out[3] = layout[2];
+      out[4] = layout[3];
+      return out;
+    }
+    const out = Array(benchSize).fill(null);
+    for (let i = 0; i < Math.min(layout.length, benchSize); i++) out[i] = layout[i];
+    return out;
   }
 
   function normalizeCraftGrid(grid, size) {
     const next = Array.isArray(grid) ? [...grid] : [];
     while (next.length < size) next.push(null);
-    return next.slice(0, size).map((s) => (s && s.id && s.count > 0 ? { id: s.id, count: s.count } : null));
+    return next.slice(0, size).map((s) => {
+      if (!s || !s.id) return null;
+      if (s.missing) return { id: s.id, count: 0, missing: true };
+      if (s.count > 0) return { id: s.id, count: s.count };
+      return null;
+    });
   }
 
   function returnGridToInv(grid) {
     if (!grid) return;
     for (let i = 0; i < grid.length; i++) {
       const stack = grid[i];
-      if (stack) addItem(state, stack.id, stack.count);
+      if (stack && !stack.missing && stack.count > 0) addItem(state, stack.id, stack.count);
       grid[i] = null;
     }
   }
@@ -1471,10 +1611,14 @@ window.IslandFoundry = (() => {
   function craftGridCounts(grid) {
     const counts = {};
     for (const stack of grid || []) {
-      if (!stack) continue;
+      if (!stack || stack.missing || stack.count < 1) continue;
       counts[stack.id] = (counts[stack.id] || 0) + stack.count;
     }
     return counts;
+  }
+
+  function gridHasMissing(grid) {
+    return (grid || []).some((s) => s && s.missing);
   }
 
   function recipeAffordableFromCounts(recipe, counts) {
@@ -1495,14 +1639,13 @@ window.IslandFoundry = (() => {
   }
 
   function findGridMatchedRecipe(grid, recipes) {
+    if (gridHasMissing(grid)) return null;
     const counts = craftGridCounts(grid);
     if (!Object.keys(counts).length) return null;
     let exact = null;
     let best = null;
     let bestNeed = -1;
     for (const recipe of recipes) {
-      const locked = recipe.requires?.some((r) => !state.unlockedTools.includes(r));
-      if (locked) continue;
       if (!recipeAffordableFromCounts(recipe, counts)) continue;
       if (countsExactCost(counts, recipe.cost)) {
         const need = Object.values(recipe.cost).reduce((a, b) => a + b, 0);
@@ -1525,6 +1668,10 @@ window.IslandFoundry = (() => {
     const recipe = GameData.recipes.find((r) => r.id === recipeId);
     if (!bench || !recipe) return false;
     if (!bench.recipes.some((r) => r.id === recipe.id)) return false;
+    if (gridHasMissing(bench.grid)) {
+      setToast(state, "Missing materials (red slots)");
+      return false;
+    }
     if (!gridSatisfiesRecipe(bench.grid, recipe)) return false;
     if (!spendFromCraftGrid(bench.grid, recipe.cost)) return false;
     applyCraftedRecipe(recipe);
@@ -1535,7 +1682,7 @@ window.IslandFoundry = (() => {
     const need = { ...cost };
     for (let i = 0; i < grid.length; i++) {
       const stack = grid[i];
-      if (!stack || !need[stack.id]) continue;
+      if (!stack || stack.missing || !need[stack.id]) continue;
       const take = Math.min(stack.count, need[stack.id]);
       stack.count -= take;
       need[stack.id] -= take;
@@ -1639,6 +1786,10 @@ window.IslandFoundry = (() => {
     if (!bench) return 0;
     const stack = bench.grid[index];
     if (!stack) return 0;
+    if (stack.missing || stack.count < 1) {
+      bench.grid[index] = null;
+      return 0;
+    }
     const moved = Math.min(amount, stack.count);
     addItem(state, stack.id, moved);
     stack.count -= moved;
@@ -1652,6 +1803,10 @@ window.IslandFoundry = (() => {
     if (!bench) return 0;
     const stack = bench.grid[gridIndex];
     if (!stack) return 0;
+    if (stack.missing || stack.count < 1) {
+      bench.grid[gridIndex] = null;
+      return 0;
+    }
     const dest = state.bag[bagIndex];
 
     if (dest && dest.id !== stack.id) {
@@ -1677,6 +1832,10 @@ window.IslandFoundry = (() => {
   function takeActiveGridResult() {
     const bench = getActiveBench();
     if (!bench) return false;
+    if (gridHasMissing(bench.grid)) {
+      setToast(state, "Missing materials (red slots)");
+      return false;
+    }
     const recipe = findGridMatchedRecipe(bench.grid, bench.recipes);
     if (!recipe) return false;
     if (!spendFromCraftGrid(bench.grid, recipe.cost)) return false;
@@ -1701,18 +1860,6 @@ window.IslandFoundry = (() => {
       setToast(state, "Open a Crafting Table to make that");
       return false;
     }
-    if (!recipe.atStation && bench.mode === "table") {
-      // Hand recipes stay on the Tab 2×2; table list is station-only.
-    }
-
-    if (recipe.requires?.some((r) => !state.unlockedTools.includes(r))) {
-      setToast(state, "Craft earlier tools first");
-      return false;
-    }
-    if (!canAfford(state, recipe.cost)) {
-      setToast(state, "Need more materials");
-      return false;
-    }
     if (!Array.isArray(recipe.layout) || !recipe.layout.length) {
       setToast(state, "That recipe has no craft layout");
       return false;
@@ -1722,20 +1869,34 @@ window.IslandFoundry = (() => {
     returnGridToInv(bench.grid);
     for (let i = 0; i < bench.size; i++) bench.grid[i] = null;
 
+    const layout = layoutForBench(recipe, bench.size);
+    let placed = 0;
+    let missing = 0;
+
     for (let i = 0; i < bench.size; i++) {
-      const cell = normalizeLayoutCell(recipe.layout[i]);
+      const cell = normalizeLayoutCell(layout[i]);
       if (!cell) continue;
-      if ((state.inventory[cell.id] || 0) < cell.count) {
-        returnGridToInv(bench.grid);
-        for (let j = 0; j < bench.size; j++) bench.grid[j] = null;
-        setToast(state, "Need more materials");
-        return false;
+      if ((state.inventory[cell.id] || 0) >= cell.count) {
+        removeItem(state, cell.id, cell.count);
+        bench.grid[i] = { id: cell.id, count: cell.count };
+        placed += 1;
+      } else {
+        // Ghost placeholder — dark item with red border in the UI.
+        bench.grid[i] = { id: cell.id, count: 0, missing: true };
+        missing += 1;
       }
-      removeItem(state, cell.id, cell.count);
-      bench.grid[i] = { id: cell.id, count: cell.count };
     }
 
-    setToast(state, `Arranged ${recipe.name} — take the result`);
+    if (missing > 0) {
+      setToast(
+        state,
+        placed > 0
+          ? `Arranged ${recipe.name} — red slots still needed`
+          : `Need materials for ${recipe.name} (red slots)`
+      );
+    } else {
+      setToast(state, `Arranged ${recipe.name} — take the result`);
+    }
     return true;
   }
 
@@ -1778,6 +1939,7 @@ window.IslandFoundry = (() => {
   }
 
   function openPlayerInvUi() {
+    clearBuildMode();
     closeSmelterUi();
     closeCraftTableUi();
     closeBuildUi();
@@ -1797,6 +1959,8 @@ window.IslandFoundry = (() => {
       renderHud();
       return;
     }
+    // Tab while demolishing/building: exit that mode and open inventory.
+    clearBuildMode();
     openPlayerInvUi();
   }
 
@@ -1815,6 +1979,7 @@ window.IslandFoundry = (() => {
   }
 
   function openCraftTableUi(x, y) {
+    clearBuildMode();
     closeSmelterUi();
     closePlayerInvUi();
     closeBuildUi();
@@ -1839,6 +2004,58 @@ window.IslandFoundry = (() => {
     const tag = event.target?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || event.target?.isContentEditable) return;
 
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (gamePaused) {
+        resumeGame();
+        return;
+      }
+      if (openPlayerInv) {
+        closePlayerInvUi();
+        renderHud();
+        return;
+      }
+      if (openCraftTable) {
+        closeCraftTableUi();
+        renderHud();
+        return;
+      }
+      if (openSmelter) {
+        closeSmelterUi();
+        renderHud();
+        return;
+      }
+      if (openBuildMenu) {
+        closeBuildUi();
+        renderHud();
+        return;
+      }
+      if (state.buildMode) {
+        state.buildMode = null;
+        setToast(state, "Build mode off");
+        renderHud();
+        saveState(state);
+        return;
+      }
+      pauseGame();
+      return;
+    }
+
+    if (gamePaused) return;
+
+    // 1–6 switch structures anytime (including while already placing another).
+    if (event.key >= "1" && event.key <= "9") {
+      const index = Number(event.key) - 1;
+      if (index < BUILD_STRUCTURES.length) {
+        event.preventDefault();
+        closeSmelterUi();
+        closePlayerInvUi();
+        closeCraftTableUi();
+        selectBuildMode(BUILD_STRUCTURES[index]);
+        return;
+      }
+    }
+
     if (event.key === "Tab") {
       event.preventDefault();
       togglePlayerInvUi();
@@ -1847,7 +2064,54 @@ window.IslandFoundry = (() => {
     if (event.key === "q" || event.key === "Q") {
       event.preventDefault();
       toggleBuildUi();
+      return;
     }
+    if (event.key === "f" || event.key === "F") {
+      event.preventDefault();
+      toggleDemolishMode();
+    }
+  }
+
+  function closePauseUi() {
+    gamePaused = false;
+    hideModal("pause-modal");
+  }
+
+  function pauseGame() {
+    if (!state || !playActive || gamePaused) return;
+    closeSmelterUi();
+    closePlayerInvUi();
+    closeCraftTableUi();
+    closeBuildUi();
+    gamePaused = true;
+    window.KeaghanSfx?.pauseMusic?.();
+    showModal("pause-modal");
+    setToast(state, "Paused");
+    renderHud();
+    if (state) saveState(state);
+  }
+
+  function resumeGame() {
+    if (!gamePaused) return;
+    closePauseUi();
+    window.KeaghanSfx?.resumeMusic?.();
+    setToast(state, "Resumed");
+    renderHud();
+  }
+
+  function leaveGameFromPause() {
+    if (state) saveState(state);
+    closePauseUi();
+    window.dispatchEvent(new CustomEvent("keaghan-leave-game"));
+  }
+
+  function bindPauseUi() {
+    const modal = document.getElementById("pause-modal");
+    modal?.addEventListener("click", (event) => {
+      const action = event.target.closest("[data-pause]")?.dataset.pause;
+      if (action === "resume") resumeGame();
+      else if (action === "leave") leaveGameFromPause();
+    });
   }
 
   function closeBuildUi() {
@@ -1856,6 +2120,7 @@ window.IslandFoundry = (() => {
   }
 
   function openBuildUi() {
+    clearBuildMode();
     closeSmelterUi();
     closePlayerInvUi();
     closeCraftTableUi();
@@ -1870,7 +2135,15 @@ window.IslandFoundry = (() => {
   function toggleBuildUi() {
     if (!state || !playActive) return;
 
-    // Q while building only exits build mode (does not reopen the menu).
+    // Q while demolishing: exit demolish and open the build menu.
+    if (state.buildMode === "demolish") {
+      state.buildMode = null;
+      closeBuildUi();
+      openBuildUi();
+      return;
+    }
+
+    // Q while placing a structure: only exit build mode.
     if (state.buildMode) {
       state.buildMode = null;
       closeBuildUi();
@@ -1896,31 +2169,32 @@ window.IslandFoundry = (() => {
   }
 
   function selectBuildMode(mode) {
-    if (!state) return;
+    if (!state) return false;
     if (mode === "demolish") {
       state.buildMode = "demolish";
     } else if (PLACEABLE.includes(mode)) {
-      const cost = getBuildCost(mode);
-      if (!canBuildStructure(state, mode)) {
-        // Keep menu open — never use HTML disabled (clicks fall through to the backdrop).
-        const msg = `Need ${formatCost(cost)} to build ${MACHINE_LABELS[mode] || mode}`;
-        setBuildStatus(msg, true);
-        setToast(state, msg);
-        renderHud();
-        return;
-      }
+      // Always enter build mode — materials are checked when placing (Satisfactory-style).
       state.buildMode = mode;
     } else {
-      return;
+      return false;
     }
 
     closeBuildUi();
-    setToast(
-      state,
-      BUILD_HINTS[state.buildMode] || `Build: ${MACHINE_LABELS[state.buildMode] || state.buildMode}`
-    );
+    document.activeElement?.blur?.();
+
+    let msg =
+      BUILD_HINTS[state.buildMode] ||
+      `Build: ${MACHINE_LABELS[state.buildMode] || state.buildMode}`;
+    if (mode !== "demolish") {
+      const cost = getBuildCost(mode);
+      if (!canAfford(state, cost)) {
+        msg = `${MACHINE_LABELS[mode] || mode} ready — need ${formatCost(cost)} to place`;
+      }
+    }
+    setToast(state, msg);
     renderHud();
     saveState(state);
+    return true;
   }
 
   function renderBuildUi() {
@@ -1929,7 +2203,7 @@ window.IslandFoundry = (() => {
     if (!grid || !modal || modal.hidden || !state) return;
     ensureBag(state);
 
-    grid.innerHTML = BUILD_STRUCTURES.map((id) => {
+    grid.innerHTML = BUILD_STRUCTURES.map((id, index) => {
       const item = GameData.getItem(id);
       const cost = getBuildCost(id);
       const afford = canBuildStructure(state, id);
@@ -1938,16 +2212,14 @@ window.IslandFoundry = (() => {
       const costShort = Object.entries(cost)
         .map(([cid, n]) => `${n}${GameData.getItem(cid).icon}`)
         .join(" ");
-      return `<button type="button" class="smelter-slot build-slot${afford ? "" : " is-empty"}${selected ? " is-selected" : ""}" data-build-pick="${id}" title="${item.name}: ${costText}">
+      const hotkey = String(index + 1);
+      return `<button type="button" class="smelter-slot build-slot${afford ? "" : " is-empty"}${selected ? " is-selected" : ""}" data-build-pick="${id}" title="${hotkey}: ${item.name}: ${costText}">
+        <span class="build-slot__hotkey">${hotkey}</span>
         <span class="smelter-slot__icon">${item.icon}</span>
         <span class="build-slot__cost">${costShort}</span>
         <span class="build-slot__name">${item.name}</span>
       </button>`;
     }).join("");
-
-    modal.querySelectorAll("[data-build-pick='demolish']").forEach((btn) => {
-      btn.classList.toggle("is-selected", state.buildMode === "demolish");
-    });
 
     if (!document.getElementById("build-status")?.textContent) {
       setBuildStatus("Craft Planks (Tab), then pick Crafting Table.");
@@ -1992,6 +2264,12 @@ window.IslandFoundry = (() => {
         .map((stack, index) => {
           if (!stack) {
             return `<button type="button" class="smelter-slot is-empty" data-craft-grid="${index}">${slotHtml(null, 0)}</button>`;
+          }
+          if (stack.missing) {
+            const item = GameData.getItem(stack.id);
+            return `<button type="button" class="smelter-slot is-missing" data-craft-grid="${index}" title="Missing ${item.name}" draggable="false">
+              <span class="smelter-slot__icon">${item.icon}</span>
+            </button>`;
           }
           return `<button type="button" class="smelter-slot" data-craft-grid="${index}" draggable="true">${slotHtml(stack.id, stack.count)}</button>`;
         })
@@ -2139,6 +2417,10 @@ window.IslandFoundry = (() => {
         };
       } else if (gridIndex != null && gridIndex !== "" && bench.grid[Number(gridIndex)]) {
         const stack = bench.grid[Number(gridIndex)];
+        if (stack.missing || stack.count < 1) {
+          event.preventDefault();
+          return;
+        }
         craftDrag = {
           from: "grid",
           itemId: stack.id,
@@ -2427,7 +2709,9 @@ window.IslandFoundry = (() => {
       const y = Number(btn.dataset.y);
       const tile = state.tiles[y * COLS + x];
       if (!tile) continue;
-      btn.className = tileClass(tile);
+      const next = tileClass(tile);
+      // Only touch className when it changes — rewriting every frame restarts CSS animations.
+      if (btn.className !== next) btn.className = next;
     }
   }
 
@@ -2444,7 +2728,14 @@ window.IslandFoundry = (() => {
       if (tile.machine) btn.dataset.machine = tile.machine;
       btn.innerHTML = `<span class="tile__icon">${tileLabel(tile)}</span>`;
       if (tile.node && tile.hp > 0 && !tile.machine) {
-        btn.title = `${GameData.nodeTypes[tile.node].label} (${tile.hp}/${tile.maxHp})`;
+        const def = GameData.nodeTypes[tile.node];
+        const minTool = def.minTool || "hand";
+        const canMine = toolTiersMeet(state.activeTool || "hand", minTool);
+        const need =
+          minTool === "hand" ? "" : ` · needs ${GameData.getItem(minTool).name}`;
+        btn.title = canMine
+          ? `${def.label} (${tile.hp}/${tile.maxHp})`
+          : `${def.label} (${tile.hp}/${tile.maxHp})${need}`;
       } else if (tile.machine) {
         const powered = poweredTilesCache.has(tileKey(tile.x, tile.y));
         const label = MACHINE_LABELS[tile.machine] || tile.machine;
@@ -2489,16 +2780,23 @@ window.IslandFoundry = (() => {
     if (!el) return;
 
     let foundCurrent = false;
-    el.innerHTML = GameData.goals
-      .map((goal) => {
-        const done = Boolean(state.goalsDone[goal.id]);
-        let status = "locked";
-        if (done) status = "done";
-        else if (!foundCurrent) {
-          status = "current";
-          foundCurrent = true;
-        }
-        const mark = done ? "✓" : status === "current" ? "▸" : "·";
+    const rows = GameData.goals.map((goal) => {
+      const done = Boolean(state.goalsDone[goal.id]);
+      let status = "locked";
+      if (done) status = "done";
+      else if (!foundCurrent) {
+        status = "current";
+        foundCurrent = true;
+      }
+      return { goal, status };
+    });
+    const sig = rows.map((r) => `${r.goal.id}:${r.status}`).join("|");
+    if (sig === advancementsSig && el.childElementCount === rows.length) return;
+    advancementsSig = sig;
+
+    el.innerHTML = rows
+      .map(({ goal, status }) => {
+        const mark = status === "done" ? "✓" : status === "current" ? "▸" : "·";
         return `<li class="advancement is-${status}">
           <span class="advancement__mark" aria-hidden="true">${mark}</span>
           <span class="advancement__text">${goal.text}</span>
@@ -2515,13 +2813,11 @@ window.IslandFoundry = (() => {
     const buildEl = document.getElementById("hud-build");
     if (toolEl) toolEl.textContent = toolName;
     if (buildEl) {
-      if (!state.buildMode) buildEl.textContent = "Build: off (Q)";
-      else if (state.buildMode === "demolish") buildEl.textContent = "Build: Demolish";
+      if (gamePaused) buildEl.textContent = "Paused (Esc)";
+      else if (!state.buildMode) buildEl.textContent = "Build: off (Q) · Demolish: F";
+      else if (state.buildMode === "demolish") buildEl.textContent = "Demolish: ON (F to exit)";
       else buildEl.textContent = `Build: ${MACHINE_LABELS[state.buildMode] || state.buildMode}`;
     }
-
-    renderAdvancements();
-    // Do NOT rebuild build-menu buttons every frame — that cancels clicks mid-press.
 
     const toast = root.querySelector("#game-toast");
     if (toast) {
@@ -2540,10 +2836,12 @@ window.IslandFoundry = (() => {
     renderInventory();
     renderCraft();
     renderHud();
+    renderAdvancements();
     renderClock();
   }
 
   function onWorldClick(event) {
+    if (gamePaused) return;
     const btn = event.target.closest(".tile");
     if (!btn) return;
     const x = Number(btn.dataset.x);
@@ -2594,7 +2892,7 @@ window.IslandFoundry = (() => {
   }
 
   function tickWorldClock() {
-    if (!state) return;
+    if (!state || gamePaused) return;
     advanceWorldTime(state, 5);
     renderClock();
     if (openSmelter) renderSmelterUi();
@@ -2604,6 +2902,11 @@ window.IslandFoundry = (() => {
 
   function loop(ts) {
     if (!state) return;
+    if (gamePaused) {
+      last = ts;
+      raf = requestAnimationFrame(loop);
+      return;
+    }
     if (!last) last = ts;
     const dt = Math.min(0.05, (ts - last) / 1000);
     last = ts;
@@ -2623,6 +2926,7 @@ window.IslandFoundry = (() => {
     root = playRoot;
     state = loadState();
     ensureBag(state);
+    normalizeNodeHitPoints(state);
     if (!Number.isFinite(state.worldMinutes)) state.worldMinutes = 6 * 60;
     for (const m of state.machines) {
       if (m.type === "smelter") ensureSmelterShape(m);
@@ -2638,6 +2942,7 @@ window.IslandFoundry = (() => {
       bindPlayerInvUi();
       bindCraftTableUi();
       bindBuildUi();
+      bindPauseUi();
       bound = true;
     }
 
@@ -2645,10 +2950,15 @@ window.IslandFoundry = (() => {
     clockTimer = window.setInterval(tickWorldClock, 5000);
 
     playActive = true;
+    gamePaused = false;
+    resetClockHandTracking();
+    advancementsSig = "";
     closeSmelterUi();
     closePlayerInvUi();
     closeCraftTableUi();
     closeBuildUi();
+    closePauseUi();
+    window.KeaghanSfx?.startMusic?.();
     render();
     cancelAnimationFrame(raf);
     last = 0;
@@ -2657,6 +2967,9 @@ window.IslandFoundry = (() => {
 
   function unmount() {
     playActive = false;
+    gamePaused = false;
+    resetClockHandTracking();
+    window.KeaghanSfx?.stopMusic?.();
     cancelAnimationFrame(raf);
     raf = 0;
     last = 0;
@@ -2668,6 +2981,7 @@ window.IslandFoundry = (() => {
     closePlayerInvUi();
     closeCraftTableUi();
     closeBuildUi();
+    closePauseUi();
     if (state) saveState(state);
   }
 

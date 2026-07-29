@@ -368,6 +368,7 @@ function bindSettings() {
 
   volume?.addEventListener("input", () => {
     saveSettings({ ...loadSettings(), volume: Number(volume.value) });
+    window.KeaghanSfx?.refreshVolumes?.();
   });
 
   fps?.addEventListener("change", () => {
@@ -510,4 +511,10 @@ bindSettings();
 bindProfiles();
 bindSaves();
 bindActions();
+
+window.addEventListener("keaghan-leave-game", () => {
+  playMenuClick();
+  showScreen("saves");
+});
+
 showScreen("title");

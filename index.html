@@ -150,9 +150,6 @@
 
       <section id="screen-play" class="screen screen--play" hidden aria-label="Game">
         <header class="hud">
-          <button type="button" class="hud__menu" data-action="back" aria-label="Return to title">
-            ← Menu
-          </button>
           <div class="hud__meta">
             <span id="hud-tool">Hand</span>
             <span id="hud-build">Build: off</span>
@@ -164,9 +161,10 @@
             <div id="world-grid" class="world-grid" role="grid" aria-label="Resource island"></div>
             <p id="game-toast" class="game-toast" hidden></p>
             <p class="world-help">
-              <strong>Tab</strong> craft parts · <strong>Q</strong> build with materials (e.g. 4
-              Planks → Crafting Table). Q again exits build mode. Resources regrow at
-              <strong>6:00 a.m.</strong> unless a building covers the node.
+              <strong>Tab</strong> craft · <strong>Q</strong> build (exits place mode; from
+              demolish opens build menu) · <strong>1–6</strong> switch buildings ·
+              <strong>F</strong> demolish · <strong>Esc</strong> closes menus, then pauses.
+              Resources regrow at <strong>6:00 a.m.</strong> unless a building covers the node.
             </p>
           </section>
 
@@ -362,7 +360,8 @@
               ></button>
             </div>
             <p class="smelter-hint">
-              Click a craftable to arrange the 3×3, then take the result. Tab has 2×2 pocket craft.
+              Click a craftable to arrange the 3×3 (basic + advanced). Tab still has 2×2 pocket
+              craft for basics only.
             </p>
           </section>
 
@@ -389,13 +388,35 @@
           </button>
         </header>
         <p class="smelter-hint build-hint">
-          Need the listed materials in your inventory, then click a structure and place it on the
-          map (like Satisfactory). Press Q again to leave build mode.
+          Pick any structure to enter build mode (or press <strong>1–6</strong>). Materials are
+          spent when you place it. Tab / Q / F still work. Empty grass only — drills on nodes.
         </p>
         <div id="build-grid" class="smelter-grid build-grid" aria-label="Placeable structures"></div>
         <p id="build-status" class="build-status" aria-live="polite"></p>
-        <div class="build-actions">
-          <button type="button" class="build-action" data-build-pick="demolish">Demolish</button>
+      </div>
+    </div>
+
+    <div id="pause-modal" class="smelter-modal pause-modal" hidden>
+      <div class="smelter-modal__backdrop"></div>
+      <div
+        class="smelter-panel pause-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pause-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="pause-title">Paused</h2>
+        </header>
+        <p class="smelter-hint pause-hint">
+          Game is paused. Resume to keep playing, or leave to return to your save slots.
+        </p>
+        <div class="pause-actions">
+          <button type="button" class="pause-btn pause-btn--resume" data-pause="resume">
+            Resume
+          </button>
+          <button type="button" class="pause-btn pause-btn--leave" data-pause="leave">
+            Leave game
+          </button>
         </div>
       </div>
     </div>
