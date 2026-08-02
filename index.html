@@ -16,6 +16,121 @@
     <div class="atmosphere" aria-hidden="true">
       <div class="atmosphere__glow atmosphere__glow--left"></div>
       <div class="atmosphere__glow atmosphere__glow--right"></div>
+      <div class="sky" id="sky-layer" hidden>
+        <div class="sky__wash"></div>
+        <div class="sky__stars"></div>
+        <div class="sky__sun" title="Sun"></div>
+        <div class="sky__moon" title="Moon"></div>
+        <div class="sky__clouds" aria-hidden="true">
+          <span class="sky__cloud sky__cloud--a"></span>
+          <span class="sky__cloud sky__cloud--b"></span>
+          <span class="sky__cloud sky__cloud--c"></span>
+          <span class="sky__cloud sky__cloud--d"></span>
+        </div>
+        <div class="sky__storm-clouds" aria-hidden="true"></div>
+        <div class="sky__lightning" id="sky-lightning" aria-hidden="true"></div>
+        <div class="sky__rain" id="sky-rain" aria-hidden="true"></div>
+        <div class="sky__terrain" aria-hidden="true">
+          <div class="sky__mountains" aria-hidden="true">
+            <svg class="sky__mountains-svg" viewBox="0 0 1200 420" preserveAspectRatio="xMidYMax meet" focusable="false">
+              <defs>
+                <linearGradient id="mtn-giant-left" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="var(--mountain-giant-lit)" />
+                  <stop offset="100%" stop-color="var(--mountain-giant)" />
+                </linearGradient>
+                <linearGradient id="mtn-giant-right" x1="1" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="var(--mountain-giant)" />
+                  <stop offset="100%" stop-color="var(--mountain-giant-shade)" />
+                </linearGradient>
+                <linearGradient id="mtn-face-a" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="var(--mountain-lit)" />
+                  <stop offset="100%" stop-color="var(--mountain-shade)" />
+                </linearGradient>
+                <linearGradient id="mtn-face-b" x1="1" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="var(--mountain-lit)" />
+                  <stop offset="100%" stop-color="var(--mountain-shade)" />
+                </linearGradient>
+                <linearGradient id="mtn-snow" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="var(--mountain-snow)" />
+                  <stop offset="100%" stop-color="var(--mountain-snow-deep)" />
+                </linearGradient>
+              </defs>
+
+              <!-- Giant peak behind everything (centered) -->
+              <g class="sky__mtn-range sky__mtn-range--giant">
+                <path fill="url(#mtn-giant-left)" d="M200 420 L600 14 L600 420 Z" />
+                <path fill="url(#mtn-giant-right)" d="M600 14 L1000 420 L600 420 Z" />
+                <path fill="url(#mtn-snow)" d="M600 14 L655 100 L600 82 L545 105 Z" />
+                <path fill="url(#mtn-snow)" opacity="0.7" d="M600 14 L638 72 L600 64 L562 76 Z" />
+                <path fill="var(--mountain-giant-shade)" opacity="0.22" d="M600 14 L1000 420 L780 420 Z" />
+
+                <!-- Summit storm clouds -->
+                <g class="sky__peak-weather">
+                  <g class="sky__peak-clouds" fill="var(--peak-cloud)" opacity="0.92">
+                    <ellipse cx="560" cy="18" rx="42" ry="16" />
+                    <ellipse cx="590" cy="8" rx="38" ry="18" />
+                    <ellipse cx="625" cy="12" rx="46" ry="17" />
+                    <ellipse cx="655" cy="22" rx="34" ry="14" />
+                    <ellipse cx="600" cy="0" rx="50" ry="20" />
+                    <ellipse cx="535" cy="28" rx="28" ry="12" opacity="0.75" />
+                    <ellipse cx="670" cy="30" rx="30" ry="12" opacity="0.75" />
+                  </g>
+                  <g class="sky__peak-snow" fill="var(--peak-snowflake)">
+                    <circle class="sky__flake sky__flake--1" cx="575" cy="30" r="1.6" />
+                    <circle class="sky__flake sky__flake--2" cx="595" cy="28" r="1.3" />
+                    <circle class="sky__flake sky__flake--3" cx="612" cy="32" r="1.8" />
+                    <circle class="sky__flake sky__flake--4" cx="630" cy="26" r="1.4" />
+                    <circle class="sky__flake sky__flake--5" cx="555" cy="36" r="1.2" />
+                    <circle class="sky__flake sky__flake--6" cx="645" cy="34" r="1.5" />
+                    <circle class="sky__flake sky__flake--7" cx="585" cy="40" r="1.1" />
+                    <circle class="sky__flake sky__flake--8" cx="620" cy="42" r="1.7" />
+                    <circle class="sky__flake sky__flake--9" cx="600" cy="38" r="1.4" />
+                    <circle class="sky__flake sky__flake--10" cx="565" cy="48" r="1.3" />
+                    <circle class="sky__flake sky__flake--11" cx="638" cy="50" r="1.2" />
+                    <circle class="sky__flake sky__flake--12" cx="608" cy="54" r="1.6" />
+                  </g>
+                </g>
+              </g>
+
+              <!-- Far range -->
+              <g class="sky__mtn-range sky__mtn-range--far">
+                <path fill="var(--mountain-far)" d="M0 420 L80 310 L150 355 L230 240 L310 330 L390 265 L470 350 L560 220 L650 335 L740 275 L830 350 L920 250 L1010 340 L1100 280 L1200 360 L1200 420 Z" />
+                <path fill="url(#mtn-snow)" opacity="0.55" d="M230 240 L255 275 L230 265 L205 280 Z" />
+                <path fill="url(#mtn-snow)" opacity="0.5" d="M560 220 L590 265 L560 250 L530 270 Z" />
+                <path fill="url(#mtn-snow)" opacity="0.45" d="M920 250 L945 285 L920 270 L895 290 Z" />
+              </g>
+
+              <!-- Near range -->
+              <g class="sky__mtn-range sky__mtn-range--near">
+                <path fill="url(#mtn-face-a)" d="M-20 420 L60 300 L140 355 L220 230 L300 315 L400 195 L500 320 L580 260 L680 345 L760 250 L860 330 L960 210 L1060 325 L1160 270 L1220 420 Z" />
+                <path fill="url(#mtn-face-b)" opacity="0.35" d="M220 230 L300 315 L220 310 Z" />
+                <path fill="url(#mtn-face-b)" opacity="0.3" d="M400 195 L500 320 L400 310 Z" />
+                <path fill="url(#mtn-face-b)" opacity="0.32" d="M760 250 L860 330 L760 325 Z" />
+                <path fill="url(#mtn-face-b)" opacity="0.28" d="M960 210 L1060 325 L960 315 Z" />
+
+                <path fill="url(#mtn-snow)" d="M220 230 L248 268 L220 258 L192 272 Z" />
+                <path fill="url(#mtn-snow)" d="M400 195 L438 245 L400 232 L362 250 Z" />
+                <path fill="url(#mtn-snow)" d="M760 250 L790 288 L760 276 L730 292 Z" />
+                <path fill="url(#mtn-snow)" d="M960 210 L995 255 L960 242 L925 260 Z" />
+              </g>
+            </svg>
+          </div>
+          <div class="sky__hills sky__hills--far"></div>
+          <div class="sky__hills sky__hills--mid"></div>
+          <div class="sky__trees">
+            <span class="sky__tree sky__tree--1"></span>
+            <span class="sky__tree sky__tree--2"></span>
+            <span class="sky__tree sky__tree--3"></span>
+            <span class="sky__tree sky__tree--4"></span>
+            <span class="sky__tree sky__tree--5"></span>
+            <span class="sky__tree sky__tree--6"></span>
+            <span class="sky__tree sky__tree--7"></span>
+          </div>
+          <div class="sky__hills sky__hills--near"></div>
+          <div class="sky__grass"></div>
+          <div class="sky__meadow"></div>
+        </div>
+      </div>
       <div class="atmosphere__grid"></div>
       <div class="atmosphere__belts"></div>
     </div>
@@ -261,6 +376,71 @@
       </div>
     </div>
 
+    <div id="generator-modal" class="smelter-modal" hidden>
+      <div class="smelter-modal__backdrop" data-generator-close></div>
+      <div class="smelter-panel generator-panel" role="dialog" aria-modal="true" aria-labelledby="generator-title">
+        <header class="smelter-panel__head">
+          <h2 id="generator-title">Coal Generator</h2>
+          <button type="button" class="smelter-panel__close" data-generator-close aria-label="Close">
+            ✕
+          </button>
+        </header>
+
+        <div class="smelter-panel__body generator-panel__body">
+          <aside class="generator-col generator-col--lever" id="generator-lever-col" hidden aria-label="Outage reset">
+            <h3>Outage</h3>
+            <div class="outage-lever" id="outage-lever" aria-label="Pull lever up to restore power">
+              <div class="outage-lever__rail">
+                <span class="outage-lever__mark outage-lever__mark--up">UP</span>
+                <div class="outage-lever__track">
+                  <div class="outage-lever__handle" id="outage-lever-handle" tabindex="0" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Outage lever"></div>
+                </div>
+                <span class="outage-lever__mark outage-lever__mark--down">TRIP</span>
+              </div>
+              <p class="smelter-hint">Pull the lever up to bring power back online.</p>
+            </div>
+          </aside>
+
+          <section class="generator-col generator-col--fuel" aria-label="Fuel">
+            <h3>Fuel</h3>
+            <button
+              type="button"
+              id="generator-fuel-slot"
+              class="smelter-slot smelter-slot--lg"
+              data-generator-slot="fuel"
+              data-generator-drop="fuel"
+              title="Coal fuel"
+            ></button>
+            <p id="generator-fuel-status" class="generator-status">Needs fuel</p>
+            <p class="smelter-hint">Drag Coal here. Burns while this generator stays online.</p>
+          </section>
+
+          <section class="generator-col generator-col--grid" aria-label="Power grid">
+            <h3>Power Grid</h3>
+            <div class="power-chart" aria-hidden="true">
+              <div class="power-chart__scale">
+                <span>20</span>
+                <span>10</span>
+                <span>0</span>
+              </div>
+              <svg id="generator-power-chart" class="power-chart__svg" viewBox="0 0 200 100" preserveAspectRatio="none">
+                <line class="power-chart__max" x1="0" y1="0" x2="200" y2="0"></line>
+                <polyline id="generator-power-line" class="power-chart__line" points=""></polyline>
+              </svg>
+            </div>
+            <p id="generator-grid-load" class="power-chart__load">0 <small>/ 20</small></p>
+            <p id="generator-grid-summary" class="generator-grid-summary">Load stays at or under 20</p>
+          </section>
+
+          <section class="smelter-col smelter-col--inv generator-col--inv" aria-label="Inventory" data-generator-drop="inv">
+            <h3>Inventory</h3>
+            <div id="generator-inv-grid" class="smelter-grid smelter-grid--inv"></div>
+            <p class="smelter-hint">Drag Coal → fuel · Drag fuel back to inventory</p>
+          </section>
+        </div>
+      </div>
+    </div>
+
     <div id="player-inv-modal" class="smelter-modal craft-station-modal" hidden>
       <div class="smelter-modal__backdrop" data-player-inv-close></div>
       <div
@@ -314,7 +494,19 @@
 
           <section class="craft-station-col craft-station-col--inv" aria-label="Inventory">
             <h3>Inventory</h3>
-            <div id="player-inv-grid" class="smelter-grid craft-inv-grid"></div>
+            <div class="craft-inv-body">
+              <div id="player-inv-grid" class="smelter-grid craft-inv-grid"></div>
+              <div
+                class="inv-trash"
+                data-inv-trash
+                role="region"
+                aria-label="Delete — drop an item here to destroy it"
+                title="Drop an item here to delete it"
+              >
+                <span class="inv-trash__icon" aria-hidden="true">🗑</span>
+                <span class="inv-trash__label">Delete</span>
+              </div>
+            </div>
           </section>
         </div>
       </div>
@@ -367,7 +559,19 @@
 
           <section class="craft-station-col craft-station-col--inv" aria-label="Inventory">
             <h3>Inventory</h3>
-            <div id="craft-table-inv-grid" class="smelter-grid craft-inv-grid"></div>
+            <div class="craft-inv-body">
+              <div id="craft-table-inv-grid" class="smelter-grid craft-inv-grid"></div>
+              <div
+                class="inv-trash"
+                data-inv-trash
+                role="region"
+                aria-label="Delete — drop an item here to destroy it"
+                title="Drop an item here to delete it"
+              >
+                <span class="inv-trash__icon" aria-hidden="true">🗑</span>
+                <span class="inv-trash__label">Delete</span>
+              </div>
+            </div>
           </section>
         </div>
       </div>
@@ -389,7 +593,8 @@
         </header>
         <p class="smelter-hint build-hint">
           Pick any structure to enter build mode (or press <strong>1–6</strong>). Materials are
-          spent when you place it. Tab / Q / F still work. Empty grass only — drills on nodes.
+          spent when you place it. Tab / Q / F still work. Grass or depleted nodes — drills on
+          nodes.
         </p>
         <div id="build-grid" class="smelter-grid build-grid" aria-label="Placeable structures"></div>
         <p id="build-status" class="build-status" aria-live="polite"></p>

@@ -1,8 +1,10 @@
 window.IslandFoundry = (() => {
   const SAVE_KEY_BASE = "keaghans-game-save-v1";
   const SLOT_COUNT = 5;
-  const COLS = 12;
-  const ROWS = 8;
+  const COLS = 10;
+  const ROWS = 10;
+  /** Bump when starter resource layout changes so saves pick up the new scramble. */
+  const WORLD_LAYOUT_VERSION = 2;
   const { GameData } = window;
 
   function saveKeyFor(profileId, slot) {
@@ -193,26 +195,81 @@ window.IslandFoundry = (() => {
       t.maxHp = def.hp;
     };
 
-    // Starter grove + rocks near spawn-ish center-left
+    // Scrambled 10×10 starter resources — clusters around the island.
+    // Trees (NW grove + a few strays)
+    place(0, 1, "tree");
+    place(1, 0, "tree");
     place(1, 2, "tree");
     place(2, 1, "tree");
-    place(2, 3, "tree");
-    place(3, 2, "tree");
-    place(1, 5, "tree");
-    place(4, 6, "rock");
-    place(5, 5, "rock");
-    place(5, 7, "rock");
-    place(3, 5, "rock");
-    place(6, 2, "coal");
+    place(3, 0, "tree");
+    place(0, 3, "tree");
+    place(4, 2, "tree");
+    // Rocks (west / center)
+    place(1, 4, "rock");
+    place(2, 5, "rock");
+    place(0, 6, "rock");
+    place(3, 4, "rock");
+    place(2, 7, "rock");
+    // Coal (north-east)
+    place(6, 0, "coal");
     place(7, 1, "coal");
+    place(8, 0, "coal");
+    place(5, 1, "coal");
+    // Iron (east)
     place(8, 3, "iron");
     place(9, 2, "iron");
     place(9, 4, "iron");
-    place(10, 5, "copper");
-    place(11, 4, "copper");
-    place(10, 6, "copper");
+    place(7, 4, "iron");
+    // Copper (south / south-east) — easy to spot from the bottom of the map
+    place(5, 8, "copper");
+    place(6, 7, "copper");
+    place(7, 8, "copper");
+    place(8, 9, "copper");
+    place(4, 9, "copper");
 
     return tiles;
+  }
+
+  /** Rebuild the island layout while keeping any placed buildings. */
+  function rebuildWorldKeepingMachines(machines) {
+    const tiles = makeWorld();
+    for (const m of machines || []) {
+      if (!m || m.x < 0 || m.y < 0 || m.x >= COLS || m.y >= ROWS) continue;
+      const tile = tiles[m.y * COLS + m.x];
+      tile.machine = m.type === "powerStation" ? "craftingStation" : m.type;
+      if (!tile.node) tile.kind = "machine";
+      if (m.type === "drill") {
+        m.resource = tile.node ? GameData.nodeTypes[tile.node].resource : null;
+      }
+    }
+    return tiles;
+  }
+
+  /** Keep saves on the current 10×10 grid after map-size / layout changes. */
+  function normalizeWorldTiles(savedTiles, machines, layoutVersion) {
+    if (!Array.isArray(savedTiles) || savedTiles.length !== COLS * ROWS) {
+      return rebuildWorldKeepingMachines(machines);
+    }
+    if (layoutVersion !== WORLD_LAYOUT_VERSION) {
+      return rebuildWorldKeepingMachines(machines);
+    }
+
+    return savedTiles.map((t, i) => {
+      const baseX = i % COLS;
+      const baseY = Math.floor(i / COLS);
+      const next =
+        t?.machine === "powerStation" ? { ...t, machine: "craftingStation" } : t;
+      return {
+        x: baseX,
+        y: baseY,
+        kind: next?.kind || "grass",
+        node: next?.node ?? null,
+        machine: next?.machine ?? null,
+        hp: Number.isFinite(next?.hp) ? next.hp : 0,
+        maxHp: Number.isFinite(next?.maxHp) ? next.maxHp : 0,
+        respawn: next?.respawn ?? null,
+      };
+    });
   }
 
   function createState() {
@@ -229,8 +286,11 @@ window.IslandFoundry = (() => {
       toast: "",
       toastUntil: 0,
       startedAt: Date.now(),
+      worldLayoutVersion: WORLD_LAYOUT_VERSION,
       // Minutes past midnight (0 = 12:00 a.m.). New games start at 6:00 a.m.
       worldMinutes: 6 * 60,
+      // kind: null | "rain" | "thunder"; minutesLeft counts down every 10 in-game minutes.
+      weather: { kind: null, minutesLeft: 0 },
     };
   }
 
@@ -251,14 +311,10 @@ window.IslandFoundry = (() => {
         inventory.craftingStation = (inventory.craftingStation || 0) + inventory.powerStation;
         delete inventory.powerStation;
       }
-      const machines = (saved.machines || []).map((m) =>
-        m?.type === "powerStation" ? { ...m, type: "craftingStation" } : m
-      );
-      const tiles = saved.tiles
-        ? saved.tiles.map((t) =>
-            t?.machine === "powerStation" ? { ...t, machine: "craftingStation" } : t
-          )
-        : fresh.tiles;
+      const machines = (saved.machines || [])
+        .map((m) => (m?.type === "powerStation" ? { ...m, type: "craftingStation" } : m))
+        .filter((m) => m && m.x >= 0 && m.y >= 0 && m.x < COLS && m.y < ROWS);
+      const tiles = normalizeWorldTiles(saved.tiles, machines, saved.worldLayoutVersion);
 
       const state = {
         ...fresh,
@@ -267,6 +323,8 @@ window.IslandFoundry = (() => {
         inventory,
         machines,
         tiles,
+        worldLayoutVersion: WORLD_LAYOUT_VERSION,
+        weather: normalizeWeather(saved.weather),
         stats: {
           gathered: { ...saved.stats?.gathered },
           smelted: { ...saved.stats?.smelted },
@@ -427,6 +485,33 @@ window.IslandFoundry = (() => {
     return true;
   }
 
+  /** Destroy a dragged bag/grid stack (drop on the inventory trash zone). */
+  function destroyDraggedStack(drag) {
+    if (!drag || !state) return false;
+    ensureBag(state);
+    if (drag.from === "bag") {
+      const stack = state.bag[drag.bagIndex];
+      if (!stack) return false;
+      const name = GameData.getItem(stack.id).name;
+      const count = stack.count;
+      state.bag[drag.bagIndex] = null;
+      rebuildInventoryFromBag(state);
+      setToast(state, `Deleted ${name} ×${count}`);
+      return true;
+    }
+    if (drag.from === "grid") {
+      const bench = getActiveBench();
+      const stack = bench?.grid?.[drag.gridIndex];
+      if (!stack || stack.missing) return false;
+      const name = GameData.getItem(stack.id).name;
+      const count = stack.count;
+      bench.grid[drag.gridIndex] = null;
+      setToast(state, `Deleted ${name} ×${count}`);
+      return true;
+    }
+    return false;
+  }
+
   function bestTool(state) {
     const order = ["ironPick", "stonePick", "woodPick", "hand"];
     for (const t of order) {
@@ -442,6 +527,80 @@ window.IslandFoundry = (() => {
 
   const DAWN_MINUTES = 6 * 60; // 6:00 a.m.
 
+  const WEATHER_TICK_MINUTES = 10;
+  const WEATHER_RAIN_MINUTES = 5 * 60;
+  const WEATHER_THUNDER_MINUTES = 5 * 60;
+  const WEATHER_THUNDER_AFTERMATH_RAIN_MINUTES = 3 * 60;
+
+  function normalizeWeather(weather) {
+    const kind = weather?.kind === "rain" || weather?.kind === "thunder" ? weather.kind : null;
+    let minutesLeft = 0;
+    if (kind && Number.isFinite(weather?.minutesLeft)) {
+      minutesLeft = Math.max(0, Math.floor(weather.minutesLeft));
+    } else if (kind && Number.isFinite(weather?.hoursLeft)) {
+      // Migrate older hour-based weather saves.
+      minutesLeft = Math.max(0, Math.floor(weather.hoursLeft) * 60);
+    }
+    if (!kind || minutesLeft < 1) return { kind: null, minutesLeft: 0 };
+    return { kind, minutesLeft };
+  }
+
+  function ensureWeather(gameState) {
+    if (!gameState) return;
+    gameState.weather = normalizeWeather(gameState.weather);
+  }
+
+  /** How many 10-minute boundaries are crossed from prev → next. */
+  function weatherTicksCrossed(prev, next) {
+    const day = 24 * 60;
+    if (prev === next) return 0;
+    const prevSlot = Math.floor(prev / WEATHER_TICK_MINUTES);
+    const nextSlot = Math.floor(next / WEATHER_TICK_MINUTES);
+    const slotsPerDay = day / WEATHER_TICK_MINUTES;
+    if (next >= prev) return Math.max(0, nextSlot - prevSlot);
+    return Math.max(0, slotsPerDay - prevSlot + nextSlot);
+  }
+
+  /**
+   * Each 10 in-game minutes:
+   * - if rain/thunder is active, only count down (no new weather rolls)
+   * - thunder ending becomes rain for 3 hours
+   * - clear skies only: 1% thunder (5h) else 5% rain (5h)
+   */
+  function tickWeatherInterval(gameState) {
+    ensureWeather(gameState);
+    const w = gameState.weather;
+
+    // Pause rain/thunder chances until the sky is clear again.
+    if (w.kind) {
+      w.minutesLeft = Math.max(0, w.minutesLeft - WEATHER_TICK_MINUTES);
+      if (w.minutesLeft > 0) return;
+
+      if (w.kind === "thunder") {
+        w.kind = "rain";
+        w.minutesLeft = WEATHER_THUNDER_AFTERMATH_RAIN_MINUTES;
+        setToast(gameState, "The storm eases into rain");
+        return;
+      }
+
+      w.kind = null;
+      w.minutesLeft = 0;
+      setToast(gameState, "The rain has stopped");
+      return;
+    }
+
+    // Clear skies — roll for new weather.
+    if (Math.random() < 0.01) {
+      w.kind = "thunder";
+      w.minutesLeft = WEATHER_THUNDER_MINUTES;
+      setToast(gameState, "Thunder rolls in");
+    } else if (Math.random() < 0.05) {
+      w.kind = "rain";
+      w.minutesLeft = WEATHER_RAIN_MINUTES;
+      setToast(gameState, "Rain begins to fall");
+    }
+  }
+
   /** 0 = 12:00 a.m. … 720 = 12:00 p.m. Minutes wrap at 1440. */
   function advanceWorldTime(gameState, minutes = 5) {
     const day = 24 * 60;
@@ -450,6 +609,8 @@ window.IslandFoundry = (() => {
     if (crossedDawn(prev, gameState.worldMinutes)) {
       regrowNodesAtDawn(gameState);
     }
+    const crossed = weatherTicksCrossed(prev, gameState.worldMinutes);
+    for (let i = 0; i < crossed; i++) tickWeatherInterval(gameState);
     tickSmelters(gameState, minutes);
   }
 
@@ -539,6 +700,72 @@ window.IslandFoundry = (() => {
     clockHandLastMinutes = null;
   }
 
+  /**
+   * Sky phases from the day clock:
+   * sunrise 6–7am, day 7am–12pm, noon 12–1pm, day 1–6pm,
+   * sunset 6–7pm, night 7pm–12am, midnight 12–1am, night 1–6am.
+   */
+  function skyPhaseFromMinutes(worldMinutes) {
+    const day = 24 * 60;
+    const t = ((Math.floor(worldMinutes) % day) + day) % day;
+    if (t >= 6 * 60 && t < 7 * 60) return "sunrise";
+    if (t >= 7 * 60 && t < 12 * 60) return "day-morning";
+    if (t >= 12 * 60 && t < 13 * 60) return "noon";
+    if (t >= 13 * 60 && t < 18 * 60) return "day-afternoon";
+    if (t >= 18 * 60 && t < 19 * 60) return "sunset";
+    if (t >= 19 * 60) return "night-evening";
+    if (t < 60) return "midnight";
+    return "night-late";
+  }
+
+  function ensureRainDrops() {
+    const rain = document.getElementById("sky-rain");
+    if (!rain || rain.childElementCount > 0) return;
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < 48; i++) {
+      const drop = document.createElement("span");
+      drop.className = "sky__raindrop";
+      drop.style.left = `${Math.random() * 100}%`;
+      drop.style.animationDelay = `${Math.random() * 1.6}s`;
+      drop.style.animationDuration = `${0.55 + Math.random() * 0.55}s`;
+      drop.style.opacity = `${0.35 + Math.random() * 0.5}`;
+      frag.appendChild(drop);
+    }
+    rain.appendChild(frag);
+  }
+
+  function updateSkyBackground() {
+    const sky = document.getElementById("sky-layer");
+    const atmo = document.querySelector(".atmosphere");
+    if (!sky || !atmo) return;
+
+    if (!playActive || !state) {
+      sky.hidden = true;
+      sky.removeAttribute("data-phase");
+      sky.removeAttribute("data-weather");
+      atmo.removeAttribute("data-sky-phase");
+      atmo.removeAttribute("data-weather");
+      return;
+    }
+
+    ensureWeather(state);
+    ensureRainDrops();
+
+    const phase = skyPhaseFromMinutes(state.worldMinutes);
+    const weather = state.weather?.kind || "";
+    sky.hidden = false;
+    if (sky.dataset.phase !== phase) sky.dataset.phase = phase;
+    if ((sky.dataset.weather || "") !== weather) {
+      if (weather) sky.dataset.weather = weather;
+      else sky.removeAttribute("data-weather");
+    }
+    if (atmo.dataset.skyPhase !== phase) atmo.dataset.skyPhase = phase;
+    if ((atmo.dataset.weather || "") !== weather) {
+      if (weather) atmo.dataset.weather = weather;
+      else atmo.removeAttribute("data-weather");
+    }
+  }
+
   function renderClock() {
     if (!root || !state) return;
     const timeEl = root.querySelector("#clock-time");
@@ -549,6 +776,7 @@ window.IslandFoundry = (() => {
       // Keep hub-centered pivot from CSS; only set rotation angle.
       handEl.style.transform = `translate(-50%, -100%) rotate(${clockHandDegrees(state.worldMinutes)}deg)`;
     }
+    updateSkyBackground();
   }
 
   function grantHarvest(state, resourceId, amount, labelHint) {
@@ -565,32 +793,22 @@ window.IslandFoundry = (() => {
     return have >= need;
   }
 
-  /**
-   * All tools deal 1 damage by default.
-   * Stone pick: 2 vs rock/coal.
-   * Iron pick: 3 vs rock/coal, 2 vs iron/copper.
-   */
-  function harvestDamage(toolId, nodeType) {
-    const soft = nodeType === "rock" || nodeType === "coal";
-    const hard = nodeType === "iron" || nodeType === "copper";
-    if (toolId === "ironPick") {
-      if (soft) return 3;
-      if (hard) return 2;
-      return 1;
-    }
-    if (toolId === "stonePick" && soft) return 2;
+  /** Every tool deals 1 damage — trees, rocks, and ores always take 5 hits. */
+  function harvestDamage(_toolId, _nodeType) {
     return 1;
   }
 
-  /** Keep saved nodes on the 3-hit scale after balance changes. */
+  /** Keep saved nodes on the 5-hit scale after balance changes. */
   function normalizeNodeHitPoints(gameState) {
     if (!gameState?.tiles) return;
     for (const tile of gameState.tiles) {
       if (!tile.node) continue;
       const def = GameData.nodeTypes[tile.node];
       if (!def) continue;
+      const wasFull = tile.hp > 0 && tile.hp >= (tile.maxHp || tile.hp);
       tile.maxHp = def.hp;
-      if (tile.hp > 0) tile.hp = Math.min(tile.hp, def.hp);
+      if (tile.hp <= 0) continue;
+      tile.hp = wasFull ? def.hp : Math.min(tile.hp, def.hp);
     }
   }
 
@@ -672,12 +890,12 @@ window.IslandFoundry = (() => {
     "cable",
   ];
   const BUILD_HINTS = {
-    craftingStation: "Click empty grass to build — costs 4 Planks (not on trees/ores)",
-    smelter: "Click empty grass to build — costs Stone + Coal",
+    craftingStation: "Grass or depleted nodes — costs 4 Planks (not on live trees/ores)",
+    smelter: "Grass or depleted nodes — costs Stone + Coal",
     drill: "Place on a resource node (ore/coal/rock/tree) — then power it",
-    generator: "Click empty grass to build — needs Coal afterward for power",
-    powerPole: "Click empty grass — costs Iron Ingot + Cable",
-    cable: "Click empty grass — costs 1 Cable (Copper Wire is not power cable)",
+    generator: "Grass or depleted nodes — click the generator to load Coal",
+    powerPole: "Grass or depleted nodes — costs Iron Ingot + Cable",
+    cable: "Grass or depleted nodes — costs 1 Cable (Copper Wire is not power cable)",
     demolish: "Demolish locked (F) — click buildings to remove. F or a menu to exit.",
   };
 
@@ -695,7 +913,11 @@ window.IslandFoundry = (() => {
     return canAfford(state, getBuildCost(type));
   }
 
-  /** Clear grass only — trees / rocks / ores stay free. Drills must sit on a resource node. */
+  /**
+   * Grass or depleted nodes are buildable. Live trees / rocks / ores block structures
+   * (except drills, which must sit on a resource node). A building on a depleted node
+   * stops dawn regrowth until it is demolished.
+   */
   function canPlaceOnTile(type, tile) {
     if (!tile || tile.machine) return { ok: false, reason: "Tile occupied" };
     if (type === "drill") {
@@ -704,9 +926,9 @@ window.IslandFoundry = (() => {
       }
       return { ok: true };
     }
-    if (tile.node) {
+    if (tile.node && tile.hp > 0) {
       const label = GameData.nodeTypes[tile.node]?.label || "resource";
-      return { ok: false, reason: `Can't build on ${label} — clear grass only` };
+      return { ok: false, reason: `Can't build on live ${label} — harvest it first` };
     }
     return { ok: true };
   }
@@ -734,13 +956,41 @@ window.IslandFoundry = (() => {
     return Math.max(dx, dy) <= range; // stations: king-move reach
   }
 
+  const POWER_GRID_MAX = 20;
+  const POWER_LOAD_HISTORY = 28;
+  /** Power draw per machine type on a generator's network. */
+  const POWER_DRAW = {
+    drill: 4,
+    smelter: 2,
+  };
+
+  function isGeneratorFueled(machine) {
+    if (!machine || machine.type !== "generator") return false;
+    ensureGeneratorShape(machine);
+    return machine.fuelCount > 0 && (!machine.fuelId || machine.fuelId === "coal");
+  }
+
+  /** True when this generator is wired to at least one other network building. */
+  function generatorHasConnection(state, machine) {
+    if (!state || !machine) return false;
+    const component = getNetworkComponent(state, machine);
+    return component.some((node) => !(node.x === machine.x && node.y === machine.y));
+  }
+
+  /** Fueled, wired, and not tripped by overload. */
+  function isGeneratorOnline(machine) {
+    return (
+      isGeneratorFueled(machine) &&
+      !machine.outage &&
+      generatorHasConnection(state, machine)
+    );
+  }
+
   /** Fueled generators flood through adjacent cables/poles/stations into a powered set. */
   function computePoweredTiles(state) {
     const network = new Set(GameData.powerNetwork || []);
     const nodes = state.machines.filter((m) => network.has(m.type));
-    const fueledGens = nodes.filter(
-      (m) => m.type === "generator" && (state.inventory.coal || 0) > 0
-    );
+    const fueledGens = nodes.filter((m) => isGeneratorOnline(m));
     const powered = new Set();
     const queue = [];
 
@@ -785,6 +1035,132 @@ window.IslandFoundry = (() => {
       progressMinutes: 0,
       smeltingSlot: -1, // which input stack is currently being smelted
     };
+  }
+
+  function makeGeneratorMachine(x, y) {
+    return {
+      type: "generator",
+      x,
+      y,
+      timer: 0,
+      interval: 4,
+      fuelId: null, // coal only
+      fuelCount: 0,
+      outage: false,
+      gridLoad: 0,
+      loadHistory: Array.from({ length: POWER_LOAD_HISTORY }, () => 0),
+      loadTick: 0,
+    };
+  }
+
+  function ensureGeneratorShape(m) {
+    if (!m || m.type !== "generator") return m;
+    if (!Number.isFinite(m.fuelCount) || m.fuelCount < 0) m.fuelCount = 0;
+    if (m.fuelCount <= 0) {
+      m.fuelId = null;
+      m.fuelCount = 0;
+    } else {
+      m.fuelId = "coal";
+    }
+    if (!Number.isFinite(m.timer)) m.timer = 0;
+    if (!Number.isFinite(m.interval) || m.interval <= 0) m.interval = 4;
+    m.outage = Boolean(m.outage);
+    if (!Number.isFinite(m.gridLoad) || m.gridLoad < 0) m.gridLoad = 0;
+    if (!Array.isArray(m.loadHistory) || !m.loadHistory.length) {
+      m.loadHistory = Array.from({ length: POWER_LOAD_HISTORY }, () => Math.round(m.gridLoad) || 0);
+    } else {
+      m.loadHistory = m.loadHistory
+        .map((n) => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0))
+        .slice(-POWER_LOAD_HISTORY);
+      while (m.loadHistory.length < POWER_LOAD_HISTORY) m.loadHistory.unshift(0);
+    }
+    if (!Number.isFinite(m.loadTick)) m.loadTick = 0;
+    return m;
+  }
+
+  function networkPowerDemand(state, gen) {
+    const component = getNetworkComponent(state, gen);
+    let demand = 0;
+    for (const node of component) {
+      demand += POWER_DRAW[node.type] || 0;
+    }
+    return demand;
+  }
+
+  /** Step load toward demand (up, down, or flat), trip if over max. */
+  function tickGeneratorLoad(state, m, dt) {
+    ensureGeneratorShape(m);
+    m.loadTick += dt;
+    if (m.loadTick < 0.35) return;
+    m.loadTick = 0;
+
+    // During an outage the chart freezes on the tripped reading.
+    if (m.outage) {
+      m.loadHistory.push(Math.round(m.gridLoad) || 0);
+      if (m.loadHistory.length > POWER_LOAD_HISTORY) {
+        m.loadHistory = m.loadHistory.slice(-POWER_LOAD_HISTORY);
+      }
+      return;
+    }
+
+    const demand = isGeneratorFueled(m) ? networkPowerDemand(state, m) : 0;
+    const prev = Math.round(m.gridLoad) || 0;
+    let next = prev;
+    if (demand > prev) next = prev + 1;
+    else if (demand < prev) next = prev - 1;
+    // else stay flat
+
+    m.gridLoad = Math.max(0, next);
+    m.loadHistory.push(m.gridLoad);
+    if (m.loadHistory.length > POWER_LOAD_HISTORY) {
+      m.loadHistory = m.loadHistory.slice(-POWER_LOAD_HISTORY);
+    }
+
+    if (isGeneratorFueled(m) && m.gridLoad > POWER_GRID_MAX) {
+      m.outage = true;
+      setToast(state, "Offline — grid load exceeded 20. Pull the lever up to reset.");
+    }
+  }
+
+  function resetGeneratorOutage(m) {
+    if (!m || !m.outage) return false;
+    ensureGeneratorShape(m);
+    m.outage = false;
+    const demand = state ? networkPowerDemand(state, m) : 0;
+    m.gridLoad = Math.min(POWER_GRID_MAX, demand);
+    m.loadHistory.push(m.gridLoad);
+    if (m.loadHistory.length > POWER_LOAD_HISTORY) {
+      m.loadHistory = m.loadHistory.slice(-POWER_LOAD_HISTORY);
+    }
+    return true;
+  }
+
+  function returnGeneratorContents(state, m) {
+    ensureGeneratorShape(m);
+    if (m.fuelId && m.fuelCount > 0) addItem(state, m.fuelId, m.fuelCount);
+    m.fuelId = null;
+    m.fuelCount = 0;
+  }
+
+  /** All network machines reachable from `start` (cables, poles, gens, drills…). */
+  function getNetworkComponent(state, start) {
+    const network = new Set(GameData.powerNetwork || []);
+    if (!start || !network.has(start.type)) return [];
+    const nodes = state.machines.filter((m) => network.has(m.type));
+    const seen = new Set([tileKey(start.x, start.y)]);
+    const out = [start];
+    const queue = [start];
+    while (queue.length) {
+      const here = queue.shift();
+      for (const other of nodes) {
+        const key = tileKey(other.x, other.y);
+        if (seen.has(key) || !canPowerLink(here, other)) continue;
+        seen.add(key);
+        out.push(other);
+        queue.push(other);
+      }
+    }
+    return out;
   }
 
   function getSmeltRecipe(inputId) {
@@ -1032,19 +1408,8 @@ window.IslandFoundry = (() => {
       state.machines.push(makeSmelterMachine(tile.x, tile.y));
       setToast(state, "Smelter placed — click it to open (log or coal for heat)");
     } else if (type === "generator") {
-      state.machines.push({
-        type: "generator",
-        x: tile.x,
-        y: tile.y,
-        timer: 0,
-        interval: 4,
-      });
-      setToast(
-        state,
-        (state.inventory.coal || 0) > 0
-          ? "Generator online — run cables/poles to your machines"
-          : "Generator placed — needs Coal in inventory for fuel"
-      );
+      state.machines.push(makeGeneratorMachine(tile.x, tile.y));
+      setToast(state, "Generator placed — click it to load Coal and check the power grid");
     } else if (type === "powerPole") {
       state.machines.push({
         type: "powerPole",
@@ -1084,11 +1449,13 @@ window.IslandFoundry = (() => {
     const type = tile.machine;
     const machine = state.machines.find((m) => m.x === tile.x && m.y === tile.y);
     if (machine?.type === "smelter") returnSmelterContents(state, machine);
+    if (machine?.type === "generator") returnGeneratorContents(state, machine);
     if (machine?.type === "craftingStation") {
       ensureCraftTableShape(machine);
       returnGridToInv(machine.craftGrid);
     }
     if (openSmelter && openSmelter.x === tile.x && openSmelter.y === tile.y) closeSmelterUi();
+    if (openGenerator && openGenerator.x === tile.x && openGenerator.y === tile.y) closeGeneratorUi();
     if (openCraftTable && openCraftTable.x === tile.x && openCraftTable.y === tile.y) {
       openCraftTable = null;
       hideModal("craft-table-modal");
@@ -1112,14 +1479,20 @@ window.IslandFoundry = (() => {
   function tickMachines(state, dt) {
     const poweredTiles = computePoweredTiles(state);
 
-    // Burn coal in each fueled generator on its interval while the grid is up.
+    // Burn coal / update load chart on each generator while online.
     for (const m of state.machines) {
       if (m.type !== "generator") continue;
-      if ((state.inventory.coal || 0) < 1) continue;
+      ensureGeneratorShape(m);
+      tickGeneratorLoad(state, m, dt);
+      if (!isGeneratorOnline(m)) continue;
       m.timer += dt;
       if (m.timer < m.interval) continue;
       m.timer = 0;
-      removeItem(state, "coal", 1);
+      m.fuelCount -= 1;
+      if (m.fuelCount <= 0) {
+        m.fuelCount = 0;
+        m.fuelId = null;
+      }
     }
 
     // Recompute after possible fuel change this frame.
@@ -1145,12 +1518,41 @@ window.IslandFoundry = (() => {
     poweredTilesCache = poweredNow;
   }
 
+  function burstConfetti({ count = 56 } = {}) {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
+
+    const colors = ["#3ddc97", "#f0b429", "#f2f7f4", "#7ec8ff", "#e29a3a", "#5ec4a8"];
+    const layer = document.createElement("div");
+    layer.className = "confetti-layer";
+    layer.setAttribute("aria-hidden", "true");
+
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < count; i++) {
+      const piece = document.createElement("span");
+      const round = Math.random() < 0.28;
+      piece.className = `confetti-piece${round ? " is-round" : ""}`;
+      piece.style.setProperty("--x", `${4 + Math.random() * 92}%`);
+      piece.style.setProperty("--c", colors[i % colors.length]);
+      piece.style.setProperty("--w", `${5 + Math.floor(Math.random() * 7)}px`);
+      piece.style.setProperty("--h", `${8 + Math.floor(Math.random() * 10)}px`);
+      piece.style.setProperty("--drift", `${Math.round((Math.random() - 0.5) * 180)}px`);
+      piece.style.setProperty("--spin", `${Math.round(360 + Math.random() * 720)}deg`);
+      piece.style.setProperty("--dur", `${1.25 + Math.random() * 0.9}s`);
+      piece.style.setProperty("--delay", `${Math.random() * 0.18}s`);
+      frag.appendChild(piece);
+    }
+    layer.appendChild(frag);
+    document.body.appendChild(layer);
+    window.setTimeout(() => layer.remove(), 2600);
+  }
+
   function updateGoals(state) {
     let changed = false;
     for (const goal of GameData.goals) {
       if (!state.goalsDone[goal.id] && goal.check(state)) {
         state.goalsDone[goal.id] = true;
         setToast(state, `Goal complete: ${goal.text}`);
+        burstConfetti();
         changed = true;
       }
     }
@@ -1173,6 +1575,7 @@ window.IslandFoundry = (() => {
   let bound = false;
   let poweredTilesCache = new Set();
   let openSmelter = null; // { x, y } of open smelter UI
+  let openGenerator = null; // { x, y } of open generator UI
   let openPlayerInv = false;
   let openCraftTable = null; // { x, y } of open crafting table
   let openBuildMenu = false;
@@ -1181,6 +1584,7 @@ window.IslandFoundry = (() => {
   let playerCraftGrid = [null, null, null, null];
   let craftDrag = null;
   let smelterDrag = null; // { from, itemId, count, outIndex? }
+  let generatorDrag = null; // { from, itemId, count }
   let playActive = false;
 
   function findOpenSmelterMachine() {
@@ -1483,6 +1887,7 @@ window.IslandFoundry = (() => {
   function toggleDemolishMode() {
     if (!state || !playActive) return;
     closeSmelterUi();
+    closeGeneratorUi();
     closePlayerInvUi();
     closeCraftTableUi();
     closeBuildUi();
@@ -1501,6 +1906,7 @@ window.IslandFoundry = (() => {
   function openSmelterUi(x, y) {
     if (!state) return;
     clearBuildMode();
+    closeGeneratorUi();
     closePlayerInvUi();
     closeCraftTableUi();
     closeBuildUi();
@@ -1535,6 +1941,414 @@ window.IslandFoundry = (() => {
       modal.setAttribute("hidden", "");
       modal.style.display = "none";
     }
+  }
+
+  function findOpenGeneratorMachine() {
+    if (!state || !openGenerator) return null;
+    const m = state.machines.find(
+      (machine) =>
+        machine.type === "generator" &&
+        machine.x === openGenerator.x &&
+        machine.y === openGenerator.y
+    );
+    return m ? ensureGeneratorShape(m) : null;
+  }
+
+  function clearGeneratorDrag() {
+    generatorDrag = null;
+    document.getElementById("generator-modal")?.classList.remove("is-dragging");
+    document
+      .querySelectorAll(
+        "#generator-modal .smelter-slot.is-drag-source, #generator-modal .smelter-slot.is-drop-hover, #generator-modal .smelter-col--inv.is-drop-hover"
+      )
+      .forEach((el) => el.classList.remove("is-drag-source", "is-drop-hover"));
+  }
+
+  function transferToGeneratorFuel(itemId, amount) {
+    const m = findOpenGeneratorMachine();
+    if (!m || amount < 1) return 0;
+    if (itemId !== "coal") {
+      setToast(state, "Coal Generator only burns Coal");
+      return 0;
+    }
+    const max = stackMax();
+    const room = max - m.fuelCount;
+    if (room <= 0) {
+      setToast(state, `Fuel stack full (${max})`);
+      return 0;
+    }
+    const moved = Math.min(amount, room, state.inventory.coal || 0);
+    if (moved < 1) return 0;
+    removeItem(state, "coal", moved);
+    m.fuelId = "coal";
+    m.fuelCount += moved;
+    return moved;
+  }
+
+  function transferGeneratorFuelToInv(amount) {
+    const m = findOpenGeneratorMachine();
+    if (!m?.fuelId || m.fuelCount < 1) return 0;
+    const moved = Math.min(amount, m.fuelCount);
+    addItem(state, m.fuelId, moved);
+    m.fuelCount -= moved;
+    if (m.fuelCount <= 0) {
+      m.fuelId = null;
+      m.fuelCount = 0;
+    }
+    return moved;
+  }
+
+  function applyGeneratorDrop(target) {
+    if (!generatorDrag || !target) return false;
+    const { from, itemId, count } = generatorDrag;
+    if (target === "fuel") {
+      if (from === "inv") return transferToGeneratorFuel(itemId, count) > 0;
+      return false;
+    }
+    if (target === "inv") {
+      if (from === "fuel") return transferGeneratorFuelToInv(count) > 0;
+      return false;
+    }
+    return false;
+  }
+
+  function renderGeneratorPowerChart(m) {
+    const line = document.getElementById("generator-power-line");
+    const loadEl = document.getElementById("generator-grid-load");
+    const summary = document.getElementById("generator-grid-summary");
+    const gridCol = document.querySelector("#generator-modal .generator-col--grid");
+    if (!m) return;
+
+    ensureGeneratorShape(m);
+    const history = m.loadHistory;
+    const w = 200;
+    const h = 100;
+    const max = POWER_GRID_MAX;
+    const points = history
+      .map((value, index) => {
+        const x = history.length <= 1 ? 0 : (index / (history.length - 1)) * w;
+        const clamped = Math.max(0, Math.min(max, value));
+        const y = h - (clamped / max) * h;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(" ");
+    if (line) line.setAttribute("points", points);
+
+    const load = Math.round(m.gridLoad) || 0;
+    if (loadEl) {
+      loadEl.innerHTML = `${load} <small>/ ${max}</small>`;
+      loadEl.classList.toggle("is-over", load > max || m.outage);
+    }
+
+    if (gridCol) gridCol.classList.toggle("is-tripped", Boolean(m.outage));
+
+    if (summary) {
+      const demand = networkPowerDemand(state, m);
+      const wired = generatorHasConnection(state, m);
+      if (m.outage) {
+        summary.textContent = "OFFLINE — pull the lever up to restore power";
+      } else if (!isGeneratorFueled(m)) {
+        summary.textContent = "Needs fuel — load Coal to power the grid";
+      } else if (!wired) {
+        summary.textContent = "Needs connection — run a cable or pole to a machine";
+      } else if (demand <= 0) {
+        summary.textContent = "Online — wired, no power draw yet";
+      } else {
+        summary.textContent = `Demand ${demand} · chart steps toward load (max ${max})`;
+      }
+    }
+  }
+
+  function syncGeneratorOutageLayout(m) {
+    const panel = document.querySelector("#generator-modal .generator-panel");
+    const body = document.querySelector("#generator-modal .generator-panel__body");
+    const leverCol = document.getElementById("generator-lever-col");
+    const outage = Boolean(m?.outage);
+    panel?.classList.toggle("is-outage", outage);
+    body?.classList.toggle("is-outage", outage);
+    if (leverCol) {
+      leverCol.hidden = !outage;
+      if (!outage) setOutageLeverPull(0);
+    }
+  }
+
+  function setOutageLeverPull(ratio) {
+    const handle = document.getElementById("outage-lever-handle");
+    const track = handle?.parentElement;
+    if (!handle || !track) return;
+    const clamped = Math.max(0, Math.min(1, ratio));
+    const travel = Math.max(0, track.clientHeight - handle.offsetHeight - 8);
+    handle.style.bottom = `${4 + clamped * travel}px`;
+    handle.setAttribute("aria-valuenow", String(Math.round(clamped * 100)));
+  }
+
+  function refreshGeneratorStatus() {
+    const modal = document.getElementById("generator-modal");
+    if (!modal || modal.hidden || generatorDrag) return;
+    const m = findOpenGeneratorMachine();
+    if (!m) return;
+
+    const fuelSlot = document.getElementById("generator-fuel-slot");
+    const fuelStatus = document.getElementById("generator-fuel-status");
+    const online = isGeneratorOnline(m);
+
+    if (fuelSlot) {
+      fuelSlot.classList.toggle("is-empty", m.fuelCount < 1);
+      fuelSlot.innerHTML = slotHtml(m.fuelId, m.fuelCount, "Coal");
+      fuelSlot.draggable = m.fuelCount > 0;
+      fuelSlot.dataset.generatorDrop = "fuel";
+      fuelSlot.dataset.generatorSlot = "fuel";
+    }
+
+    if (fuelStatus) {
+      // Offline = outage only. Then: needs fuel → needs connection → online.
+      const wired = generatorHasConnection(state, m);
+      let label = "Needs fuel";
+      if (m.outage) label = "Offline";
+      else if (!isGeneratorFueled(m)) label = "Needs fuel";
+      else if (!wired) label = "Needs connection";
+      else label = "Online";
+      fuelStatus.textContent = label;
+      fuelStatus.classList.toggle("is-online", online);
+      fuelStatus.classList.toggle("is-offline", Boolean(m.outage));
+      fuelStatus.classList.toggle("is-needs-fuel", !m.outage && !isGeneratorFueled(m));
+      fuelStatus.classList.toggle("is-needs-connection", !m.outage && isGeneratorFueled(m) && !wired);
+    }
+
+    syncGeneratorOutageLayout(m);
+    renderGeneratorPowerChart(m);
+    poweredTilesCache = computePoweredTiles(state);
+  }
+
+  function renderGeneratorUi() {
+    const modal = document.getElementById("generator-modal");
+    if (!modal || modal.hidden) return;
+    const m = findOpenGeneratorMachine();
+    if (!m) {
+      closeGeneratorUi();
+      return;
+    }
+
+    const invGrid = document.getElementById("generator-inv-grid");
+    const stacks = Object.entries(state.inventory).filter(([, n]) => n > 0);
+    if (invGrid) {
+      if (!stacks.length) {
+        invGrid.innerHTML = `<button type="button" class="smelter-slot is-empty" data-generator-drop="inv" disabled>${slotHtml(null, 0)}</button>`;
+      } else {
+        invGrid.innerHTML = stacks
+          .map(
+            ([id, n]) =>
+              `<button type="button" class="smelter-slot" data-generator-drop="inv" data-generator-inv="${id}" draggable="true">${slotHtml(id, n)}</button>`
+          )
+          .join("");
+      }
+    }
+
+    refreshGeneratorStatus();
+  }
+
+  function afterGeneratorChange() {
+    renderGeneratorUi();
+    saveState(state);
+    renderInventory();
+    refreshTilePowerStyles();
+    renderHud();
+  }
+
+  function openGeneratorUi(x, y) {
+    if (!state) return;
+    clearBuildMode();
+    closeSmelterUi();
+    closePlayerInvUi();
+    closeCraftTableUi();
+    closeBuildUi();
+
+    let m = state.machines.find((machine) => machine.x === x && machine.y === y && machine.type === "generator");
+    if (!m) {
+      m = makeGeneratorMachine(x, y);
+      state.machines.push(m);
+      const tile = getTile(state, x, y);
+      if (tile) tile.machine = "generator";
+    }
+    ensureGeneratorShape(m);
+    openGenerator = { x, y };
+
+    const modal = document.getElementById("generator-modal");
+    if (!modal) {
+      setToast(state, "Generator UI missing — hard-refresh the page (Ctrl+Shift+R)");
+      return;
+    }
+
+    modal.hidden = false;
+    modal.removeAttribute("hidden");
+    modal.style.display = "grid";
+    modal.style.visibility = "visible";
+    modal.style.opacity = "1";
+    modal.style.pointerEvents = "auto";
+    modal.style.zIndex = "10000";
+
+    renderGeneratorUi();
+    renderHud();
+    setToast(state, "Coal Generator — load Coal to power the grid");
+  }
+
+  function closeGeneratorUi() {
+    clearGeneratorDrag();
+    openGenerator = null;
+    const modal = document.getElementById("generator-modal");
+    if (modal) {
+      modal.hidden = true;
+      modal.setAttribute("hidden", "");
+      modal.style.display = "none";
+    }
+  }
+
+  function bindGeneratorUi() {
+    const modal = document.getElementById("generator-modal");
+    if (!modal) return;
+
+    let leverDrag = null; // { startY, startPull }
+
+    function pullRatioFromClientY(clientY) {
+      const track = document.querySelector("#outage-lever .outage-lever__track");
+      const handle = document.getElementById("outage-lever-handle");
+      if (!track || !handle) return 0;
+      const rect = track.getBoundingClientRect();
+      const travel = Math.max(1, rect.height - handle.offsetHeight - 8);
+      const fromBottom = rect.bottom - 4 - handle.offsetHeight / 2 - clientY;
+      return Math.max(0, Math.min(1, fromBottom / travel));
+    }
+
+    function endLeverDrag(commit) {
+      const lever = document.getElementById("outage-lever");
+      lever?.classList.remove("is-pulling");
+      if (!leverDrag) return;
+      leverDrag = null;
+      if (!commit) {
+        setOutageLeverPull(0);
+        return;
+      }
+      const m = findOpenGeneratorMachine();
+      if (m && resetGeneratorOutage(m)) {
+        setToast(state, "Power restored");
+        afterGeneratorChange();
+      } else {
+        setOutageLeverPull(0);
+      }
+    }
+
+    modal.addEventListener("click", (event) => {
+      if (generatorDrag || leverDrag) return;
+      if (event.target.closest("[data-generator-close]")) {
+        closeGeneratorUi();
+        return;
+      }
+      const invId = event.target.closest("[data-generator-inv]")?.dataset.generatorInv;
+      if (invId) {
+        if (invId === "coal") {
+          if (transferToGeneratorFuel("coal", 1) > 0) afterGeneratorChange();
+        } else {
+          setToast(state, "Coal Generator only burns Coal");
+        }
+        return;
+      }
+      const slot = event.target.closest("[data-generator-slot]")?.dataset.generatorSlot;
+      if (slot === "fuel") {
+        if (transferGeneratorFuelToInv(1) > 0) afterGeneratorChange();
+      }
+    });
+
+    modal.addEventListener("pointerdown", (event) => {
+      const handle = event.target.closest("#outage-lever-handle");
+      if (!handle) return;
+      const m = findOpenGeneratorMachine();
+      if (!m?.outage) return;
+      event.preventDefault();
+      handle.setPointerCapture?.(event.pointerId);
+      leverDrag = { startY: event.clientY, startPull: 0 };
+      document.getElementById("outage-lever")?.classList.add("is-pulling");
+      setOutageLeverPull(0);
+    });
+
+    modal.addEventListener("pointermove", (event) => {
+      if (!leverDrag) return;
+      const pull = pullRatioFromClientY(event.clientY);
+      setOutageLeverPull(pull);
+      if (pull >= 0.82) endLeverDrag(true);
+    });
+
+    modal.addEventListener("pointerup", () => {
+      if (!leverDrag) return;
+      const handle = document.getElementById("outage-lever-handle");
+      const pull = Number(handle?.getAttribute("aria-valuenow") || 0) / 100;
+      endLeverDrag(pull >= 0.75);
+    });
+
+    modal.addEventListener("pointercancel", () => endLeverDrag(false));
+
+    modal.addEventListener("dragstart", (event) => {
+      const slot = event.target.closest(".smelter-slot");
+      if (!slot || slot.disabled) return;
+      const m = findOpenGeneratorMachine();
+      if (!m) return;
+
+      const invId = slot.dataset.generatorInv;
+      const kind = slot.dataset.generatorSlot;
+
+      if (invId) {
+        const available = state.inventory[invId] || 0;
+        if (available < 1) return;
+        generatorDrag = { from: "inv", itemId: invId, count: Math.min(available, stackMax()) };
+      } else if (kind === "fuel" && m.fuelCount > 0) {
+        generatorDrag = { from: "fuel", itemId: m.fuelId, count: m.fuelCount };
+      } else {
+        event.preventDefault();
+        return;
+      }
+
+      slot.classList.add("is-drag-source");
+      modal.classList.add("is-dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", generatorDrag.itemId);
+    });
+
+    modal.addEventListener("dragover", (event) => {
+      const drop = event.target.closest(
+        "[data-generator-drop], [data-generator-slot], .generator-col--inv"
+      );
+      if (!drop || !generatorDrag) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      modal
+        .querySelectorAll(".smelter-slot.is-drop-hover, .smelter-col--inv.is-drop-hover")
+        .forEach((el) => el.classList.remove("is-drop-hover"));
+      const slot = event.target.closest(".smelter-slot");
+      if (slot) slot.classList.add("is-drop-hover");
+      else if (drop.classList?.contains("generator-col--inv") || drop.classList?.contains("smelter-col--inv")) {
+        drop.classList.add("is-drop-hover");
+      }
+    });
+
+    modal.addEventListener("dragleave", (event) => {
+      const slot = event.target.closest(".smelter-slot, .smelter-col--inv");
+      if (slot) slot.classList.remove("is-drop-hover");
+    });
+
+    modal.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const slot = event.target.closest(".smelter-slot");
+      const dropZone = event.target.closest("[data-generator-drop]");
+      let target = dropZone?.dataset.generatorDrop || null;
+      if (!target && slot?.dataset.generatorSlot) target = slot.dataset.generatorSlot;
+      if (!target && event.target.closest(".generator-col--inv")) target = "inv";
+
+      if (target && applyGeneratorDrop(target)) afterGeneratorChange();
+      clearGeneratorDrag();
+    });
+
+    modal.addEventListener("dragend", () => {
+      clearGeneratorDrag();
+    });
   }
 
   function recipeButtonsHtml(recipes, { fromStation = false, dataAttr = null } = {}) {
@@ -1941,6 +2755,7 @@ window.IslandFoundry = (() => {
   function openPlayerInvUi() {
     clearBuildMode();
     closeSmelterUi();
+    closeGeneratorUi();
     closeCraftTableUi();
     closeBuildUi();
     openPlayerInv = true;
@@ -1981,6 +2796,7 @@ window.IslandFoundry = (() => {
   function openCraftTableUi(x, y) {
     clearBuildMode();
     closeSmelterUi();
+    closeGeneratorUi();
     closePlayerInvUi();
     closeBuildUi();
     const exists = state.machines.some(
@@ -2025,6 +2841,11 @@ window.IslandFoundry = (() => {
         renderHud();
         return;
       }
+      if (openGenerator) {
+        closeGeneratorUi();
+        renderHud();
+        return;
+      }
       if (openBuildMenu) {
         closeBuildUi();
         renderHud();
@@ -2049,6 +2870,7 @@ window.IslandFoundry = (() => {
       if (index < BUILD_STRUCTURES.length) {
         event.preventDefault();
         closeSmelterUi();
+        closeGeneratorUi();
         closePlayerInvUi();
         closeCraftTableUi();
         selectBuildMode(BUILD_STRUCTURES[index]);
@@ -2080,6 +2902,7 @@ window.IslandFoundry = (() => {
   function pauseGame() {
     if (!state || !playActive || gamePaused) return;
     closeSmelterUi();
+    closeGeneratorUi();
     closePlayerInvUi();
     closeCraftTableUi();
     closeBuildUi();
@@ -2122,6 +2945,7 @@ window.IslandFoundry = (() => {
   function openBuildUi() {
     clearBuildMode();
     closeSmelterUi();
+    closeGeneratorUi();
     closePlayerInvUi();
     closeCraftTableUi();
     openBuildMenu = true;
@@ -2441,14 +3265,18 @@ window.IslandFoundry = (() => {
     modal.addEventListener("dragover", (event) => {
       if (!craftDrag) return;
       const drop = event.target.closest(
-        "[data-craft-grid], [data-bag-slot], .craft-station-col--inv, .craft-grid"
+        "[data-craft-grid], [data-bag-slot], [data-inv-trash], .craft-station-col--inv, .craft-grid"
       );
       if (!drop) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = "move";
-      modal.querySelectorAll(".smelter-slot.is-drop-hover").forEach((el) => el.classList.remove("is-drop-hover"));
+      modal
+        .querySelectorAll(".smelter-slot.is-drop-hover, .inv-trash.is-drop-hover")
+        .forEach((el) => el.classList.remove("is-drop-hover"));
+      const trash = event.target.closest("[data-inv-trash]");
       const hover = event.target.closest(".smelter-slot");
-      if (hover) hover.classList.add("is-drop-hover");
+      if (trash) trash.classList.add("is-drop-hover");
+      else if (hover) hover.classList.add("is-drop-hover");
     });
 
     modal.addEventListener("drop", (event) => {
@@ -2458,12 +3286,15 @@ window.IslandFoundry = (() => {
         return;
       }
       ensureBag(state);
+      const trash = event.target.closest("[data-inv-trash]");
       const gridSlot = event.target.closest("[data-craft-grid]");
       const bagSlot = event.target.closest("[data-bag-slot]");
       const toInvArea = event.target.closest(".craft-station-col--inv");
 
       let changed = false;
-      if (gridSlot && craftDrag.from === "bag") {
+      if (trash) {
+        changed = destroyDraggedStack(craftDrag);
+      } else if (gridSlot && craftDrag.from === "bag") {
         changed = pushToActiveGridFromBag(craftDrag.bagIndex, craftDrag.count) > 0;
       } else if (bagSlot && craftDrag.from === "bag") {
         changed = swapOrMergeBagSlots(craftDrag.bagIndex, Number(bagSlot.dataset.bagSlot));
@@ -2665,7 +3496,10 @@ window.IslandFoundry = (() => {
     const onGrid = poweredTilesCache.has(key);
 
     if (tile.machine === "generator") {
-      return `tile tile--generator${(state.inventory.coal || 0) > 0 ? " is-powered" : " is-unpowered"}`;
+      const gen = state.machines.find(
+        (machine) => machine.type === "generator" && machine.x === tile.x && machine.y === tile.y
+      );
+      return `tile tile--generator${isGeneratorOnline(gen) ? " is-powered" : " is-unpowered"}`;
     }
     if (tile.machine === "powerPole") {
       return `tile tile--pole${onGrid ? " is-powered" : " is-unpowered"}`;
@@ -2739,26 +3573,45 @@ window.IslandFoundry = (() => {
       } else if (tile.machine) {
         const powered = poweredTilesCache.has(tileKey(tile.x, tile.y));
         const label = MACHINE_LABELS[tile.machine] || tile.machine;
+        const blocking =
+          tile.node && tile.hp <= 0
+            ? ` · blocking ${GameData.nodeTypes[tile.node]?.label || "node"} regrowth`
+            : "";
         if (tile.machine === "generator") {
-          btn.title =
-            (state.inventory.coal || 0) > 0
-              ? "Coal Generator (burning fuel)"
-              : "Coal Generator (needs Coal)";
+          const gen = state.machines.find(
+            (machine) => machine.type === "generator" && machine.x === tile.x && machine.y === tile.y
+          );
+          let genTitle = "Coal Generator (needs fuel) — click to open";
+          if (gen?.outage) genTitle = "Coal Generator (offline) — click to reset";
+          else if (!isGeneratorFueled(gen)) genTitle = "Coal Generator (needs fuel) — click to open";
+          else if (!generatorHasConnection(state, gen)) {
+            genTitle = "Coal Generator (needs connection) — click to open";
+          } else if (isGeneratorOnline(gen)) {
+            genTitle = "Coal Generator (online) — click to open";
+          }
+          btn.title = `${genTitle}${blocking}`;
         } else if (tile.machine === "powerPole") {
-          btn.title = powered ? "Power Pole (live)" : "Power Pole (no power)";
+          btn.title = powered
+            ? `Power Pole (live)${blocking}`
+            : `Power Pole (no power)${blocking}`;
         } else if (tile.machine === "cable") {
-          btn.title = powered ? "Cable (live)" : "Cable (no power)";
+          btn.title = powered ? `Cable (live)${blocking}` : `Cable (no power)${blocking}`;
         } else if (tile.machine === "craftingStation") {
-          btn.title = "Crafting Table — click for 3×3 workbench";
+          btn.title = `Crafting Table — click for 3×3 workbench${blocking}`;
         } else if (tile.machine === "smelter") {
           btn.title = isSmelterLit(tile)
-            ? "Smelter (lit) — click to open"
-            : "Smelter (cold) — click to open, add log or coal for heat";
+            ? `Smelter (lit) — click to open${blocking}`
+            : `Smelter (cold) — click to open, add log or coal for heat${blocking}`;
         } else if (GameData.powerConsumers.includes(tile.machine)) {
-          btn.title = powered ? `${label} (powered)` : `${label} (no power — connect generator)`;
+          btn.title = powered
+            ? `${label} (powered)${blocking}`
+            : `${label} (no power — connect generator)${blocking}`;
         } else {
-          btn.title = label;
+          btn.title = `${label}${blocking}`;
         }
+      } else if (tile.node && tile.hp <= 0) {
+        const label = GameData.nodeTypes[tile.node]?.label || "Resource";
+        btn.title = `Depleted ${label} — build here to block regrowth`;
       } else {
         btn.title = "Empty ground";
       }
@@ -2870,6 +3723,12 @@ window.IslandFoundry = (() => {
       return;
     }
 
+    if (tile.machine === "generator") {
+      closePlayerInvUi();
+      openGeneratorUi(x, y);
+      return;
+    }
+
     if (tile.machine === "craftingStation") {
       openCraftTableUi(x, y);
       return;
@@ -2896,6 +3755,7 @@ window.IslandFoundry = (() => {
     advanceWorldTime(state, 5);
     renderClock();
     if (openSmelter) renderSmelterUi();
+    if (openGenerator) renderGeneratorUi();
     updateGoals(state);
     saveState(state);
   }
@@ -2919,6 +3779,7 @@ window.IslandFoundry = (() => {
       refreshTilePowerStyles();
     }
     if (openSmelter) refreshSmelterProgress();
+    if (openGenerator) refreshGeneratorStatus();
     raf = requestAnimationFrame(loop);
   }
 
@@ -2930,6 +3791,7 @@ window.IslandFoundry = (() => {
     if (!Number.isFinite(state.worldMinutes)) state.worldMinutes = 6 * 60;
     for (const m of state.machines) {
       if (m.type === "smelter") ensureSmelterShape(m);
+      if (m.type === "generator") ensureGeneratorShape(m);
     }
     if (!state.unlockedTools.includes("hand")) state.unlockedTools.unshift("hand");
     if (!state.activeTool) state.activeTool = bestTool(state);
@@ -2939,6 +3801,7 @@ window.IslandFoundry = (() => {
       root.addEventListener("click", onPanelClick);
       document.addEventListener("keydown", onPlayKeyDown);
       bindSmelterUi();
+      bindGeneratorUi();
       bindPlayerInvUi();
       bindCraftTableUi();
       bindBuildUi();
@@ -2954,6 +3817,7 @@ window.IslandFoundry = (() => {
     resetClockHandTracking();
     advancementsSig = "";
     closeSmelterUi();
+    closeGeneratorUi();
     closePlayerInvUi();
     closeCraftTableUi();
     closeBuildUi();
@@ -2969,6 +3833,7 @@ window.IslandFoundry = (() => {
     playActive = false;
     gamePaused = false;
     resetClockHandTracking();
+    updateSkyBackground();
     window.KeaghanSfx?.stopMusic?.();
     cancelAnimationFrame(raf);
     raf = 0;
@@ -2978,6 +3843,7 @@ window.IslandFoundry = (() => {
       clockTimer = 0;
     }
     closeSmelterUi();
+    closeGeneratorUi();
     closePlayerInvUi();
     closeCraftTableUi();
     closeBuildUi();

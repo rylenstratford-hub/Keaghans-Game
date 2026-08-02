@@ -42,11 +42,11 @@ window.GameData = {
   },
 
   nodeTypes: {
-    tree: { resource: "log", label: "Tree", hp: 3, yield: 1, minTool: "hand" },
-    rock: { resource: "stone", label: "Rock", hp: 3, yield: 1, minTool: "woodPick" },
-    coal: { resource: "coal", label: "Coal", hp: 3, yield: 1, minTool: "woodPick" },
-    iron: { resource: "ironOre", label: "Iron", hp: 3, yield: 1, minTool: "stonePick" },
-    copper: { resource: "copperOre", label: "Copper", hp: 3, yield: 1, minTool: "stonePick" },
+    tree: { resource: "log", label: "Tree", hp: 5, yield: 1, minTool: "hand" },
+    rock: { resource: "stone", label: "Rock", hp: 5, yield: 1, minTool: "woodPick" },
+    coal: { resource: "coal", label: "Coal", hp: 5, yield: 1, minTool: "woodPick" },
+    iron: { resource: "ironOre", label: "Iron", hp: 5, yield: 1, minTool: "stonePick" },
+    copper: { resource: "copperOre", label: "Copper", hp: 5, yield: 1, minTool: "stonePick" },
   },
 
   /** Higher number = stronger tool. */
@@ -57,7 +57,7 @@ window.GameData = {
     ironPick: 3,
   },
 
-  /** Base strike power; harvestDamage() applies node bonuses for stone/iron picks. */
+  /** Base strike power — all tools deal 1 damage (5 hits to clear a node). */
   tools: {
     hand: { power: 1, yieldBonus: 0 },
     woodPick: { power: 1, yieldBonus: 0 },
@@ -243,7 +243,7 @@ window.GameData = {
     },
     {
       id: "placeDrill",
-      text: "Power a Drill (generator + cables or poles)",
+      text: "Power a Drill (load Coal in a generator + cables/poles)",
       check: (s) => (s.stats.poweredDrill || 0) >= 1,
     },
     { id: "automate", text: "Let a powered Drill gather 10 ore", check: (s) => (s.stats.drilled || 0) >= 10 },
