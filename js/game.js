@@ -3,6 +3,9 @@ window.IslandFoundry = (() => {
   const SLOT_COUNT = 5;
   const COLS = 10;
   const ROWS = 10;
+  /** Indoor base map — same size as the island, split into rooms. */
+  const INTERIOR_COLS = 10;
+  const INTERIOR_ROWS = 10;
   /** Bump when starter resource layout changes so saves pick up the new scramble. */
   const WORLD_LAYOUT_VERSION = 2;
   const { GameData } = window;
@@ -90,6 +93,8 @@ window.IslandFoundry = (() => {
   }
 
   const BAG_SIZE = 27;
+  /** Each crafting-grid cell holds at most one item (Minecraft-style). */
+  const CRAFT_SLOT_MAX = 1;
 
   function emptyBag() {
     return Array.from({ length: BAG_SIZE }, () => null);
@@ -226,8 +231,46 @@ window.IslandFoundry = (() => {
     place(7, 8, "copper");
     place(8, 9, "copper");
     place(4, 9, "copper");
+    // Carrot patches (south-west grass)
+    place(0, 8, "carrot");
+    place(1, 9, "carrot");
+    place(2, 8, "carrot");
+    place(3, 9, "carrot");
 
     return tiles;
+  }
+
+  /** Older saves: sprinkle carrot plants on empty grass once. */
+  function ensureFoodNodes(gameState) {
+    if (!gameState?.tiles?.length) return;
+    if (gameState.tiles.some((t) => t.node === "carrot")) return;
+    const def = GameData.nodeTypes.carrot;
+    if (!def) return;
+    const empties = gameState.tiles.filter((t) => !t.node && !t.machine);
+    const spots = [
+      [0, 8],
+      [1, 9],
+      [2, 8],
+      [3, 9],
+    ];
+    for (const [x, y] of spots) {
+      const tile = gameState.tiles[y * COLS + x];
+      if (!tile || tile.node || tile.machine) continue;
+      tile.kind = "node";
+      tile.node = "carrot";
+      tile.hp = def.hp;
+      tile.maxHp = def.hp;
+    }
+    // Fallback if preferred spots were occupied.
+    if (!gameState.tiles.some((t) => t.node === "carrot") && empties.length) {
+      for (let i = 0; i < Math.min(4, empties.length); i++) {
+        const tile = empties[i];
+        tile.kind = "node";
+        tile.node = "carrot";
+        tile.hp = def.hp;
+        tile.maxHp = def.hp;
+      }
+    }
   }
 
   /** Rebuild the island layout while keeping any placed buildings. */
@@ -289,9 +332,738 @@ window.IslandFoundry = (() => {
       worldLayoutVersion: WORLD_LAYOUT_VERSION,
       // Minutes past midnight (0 = 12:00 a.m.). New games start at 6:00 a.m.
       worldMinutes: 6 * 60,
-      // kind: null | "rain" | "thunder"; minutesLeft counts down every 10 in-game minutes.
-      weather: { kind: null, minutesLeft: 0 },
+      // kind: null | "rain" | "thunder"; rolls on :00 / :30.
+      // thunderLocked: after thunder → rain, rain cannot become thunder again.
+      weather: { kind: null, minutesLeft: 0, thunderLocked: false },
+      hunger: GameData.hunger?.max ?? 10000,
+      hungerWarned: false,
+      health: GameData.health?.max ?? 10000,
+      healthWarned: false,
+      lastActionTile: null, // { x, y } — death crate prefers this spot
+      // Avatar on the island — moved with WASD.
+      player: defaultPlayerPos(),
+      // Night-only threats — spawn 6:00 p.m., clear 6:00 a.m.
+      monsters: [],
+      // Indoor base map — when true, #world-grid shows interiorTiles.
+      insideBase: false,
+      outdoorPlayer: null, // { x, y } stashed while indoors
+      interiorTiles: null,
     };
+  }
+
+  function defaultPlayerPos() {
+    return { x: Math.floor(COLS / 2), y: Math.floor(ROWS / 2) };
+  }
+
+  function interiorSpawnPos() {
+    // Just inside the east doors, in the hallway.
+    return { x: 7, y: 4 };
+  }
+
+  function activeMapSize(gameState) {
+    if (gameState?.insideBase) {
+      return { cols: INTERIOR_COLS, rows: INTERIOR_ROWS };
+    }
+    return { cols: COLS, rows: ROWS };
+  }
+
+  function isInsideBase(gameState) {
+    return Boolean(gameState?.insideBase);
+  }
+
+  const INTERIOR_ROOM_LABELS = {
+    hall: "Hallway",
+    upgrade: "Upgrade Room",
+    kitchen: "Kitchen",
+    living: "Living Room",
+    storage: "Storage",
+    bedroom: "Bedroom",
+  };
+
+  /**
+   * 10×10 indoor base:
+   *   NW Kitchen · N Upgrade · NE Living
+   *   SW Storage · SE Bedroom · rest Hall · doors on the east wall
+   */
+  function makeInteriorWorld(tier) {
+    const t = Math.max(1, Math.min(3, Math.floor(Number(tier) || 1)));
+    const wall = () => ({
+      kind: "wall",
+      room: null,
+      feature: null,
+      icon: null,
+      label: "Wall",
+    });
+    const cells = Array.from({ length: INTERIOR_ROWS }, () =>
+      Array.from({ length: INTERIOR_COLS }, wall)
+    );
+
+    function paint(x0, y0, x1, y1, room) {
+      const label = INTERIOR_ROOM_LABELS[room] || "Floor";
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          cells[y][x] = {
+            kind: "floor",
+            room,
+            feature: null,
+            icon: null,
+            label,
+          };
+        }
+      }
+    }
+
+    function set(x, y, patch) {
+      cells[y][x] = { ...cells[y][x], ...patch };
+    }
+
+    // 1) Hall fills the indoor area, then rooms overwrite.
+    paint(1, 1, 8, 8, "hall");
+
+    // 2) Rooms (north/south mirrored: 2-tile deep rooms + 3-tile front walls)
+    paint(1, 1, 2, 2, "kitchen"); // NW
+    paint(4, 1, 5, 2, "upgrade"); // North
+    paint(7, 1, 8, 2, "living"); // NE
+    paint(1, 7, 2, 8, "storage"); // SW
+    paint(7, 7, 8, 8, "bedroom"); // SE
+
+    // 3) Divider walls between rooms
+    for (const y of [1, 2]) {
+      set(3, y, wall());
+      set(6, y, wall());
+    }
+    for (const y of [7, 8]) {
+      set(3, y, wall());
+      set(6, y, wall());
+    }
+    // North front walls (mirror of south at y=6) — 3 tiles each side toward center
+    set(1, 3, wall());
+    set(2, 3, wall());
+    set(3, 3, wall());
+    set(6, 3, wall());
+    set(7, 3, wall());
+    set(8, 3, wall());
+    // South front walls (storage SW + bedroom SE)
+    set(1, 6, wall());
+    set(2, 6, wall());
+    set(3, 6, wall());
+    set(6, 6, wall());
+    set(7, 6, wall());
+    set(8, 6, wall());
+    // Doorways into rooms from the center hall
+    set(3, 2, { kind: "floor", room: "hall", feature: null, icon: null, label: INTERIOR_ROOM_LABELS.hall });
+    set(6, 2, { kind: "floor", room: "hall", feature: null, icon: null, label: INTERIOR_ROOM_LABELS.hall });
+    set(3, 7, { kind: "floor", room: "hall", feature: null, icon: null, label: INTERIOR_ROOM_LABELS.hall });
+    set(6, 7, { kind: "floor", room: "hall", feature: null, icon: null, label: INTERIOR_ROOM_LABELS.hall });
+
+    // 4) Outer walls
+    for (let x = 0; x < INTERIOR_COLS; x++) {
+      set(x, 0, wall());
+      set(x, 9, wall());
+    }
+    for (let y = 0; y < INTERIOR_ROWS; y++) {
+      set(0, y, wall());
+      set(9, y, wall());
+    }
+
+    // 5) East doors
+    set(9, 4, {
+      kind: "exit",
+      room: "hall",
+      feature: "exit",
+      icon: "🚪",
+      label: "Front door — leave the base",
+    });
+    set(9, 5, {
+      kind: "exit",
+      room: "hall",
+      feature: "exit",
+      icon: "🚪",
+      label: "Front door — leave the base",
+    });
+
+    // 6) Upgrade bench
+    set(4, 2, {
+      kind: "upgrade",
+      room: "upgrade",
+      feature: "upgrade",
+      icon: "⬆",
+      label: "Upgrade bench",
+    });
+
+    // 7) Props
+    const props = [
+      [1, 1, "🍳", "Stove"],
+      [2, 2, "🧊", "Fridge"],
+      [1, 2, "🔪", "Counter"],
+      [7, 1, "🛋", "Sofa"],
+      [8, 2, "🪑", "Chair"],
+      [8, 1, "🪴", "Plant"],
+      [1, 7, "📦", "Crate"],
+      [2, 8, "📦", "Crate"],
+      [1, 8, "📦", "Crate"],
+      [7, 7, "🛏", "Bed"],
+      [8, 7, "🧸", "Nightstand"],
+      [8, 8, "🪟", "Window"],
+      [4, 4, "🕯", "Hall lamp"],
+      [5, 5, "🕯", "Hall lamp"],
+    ];
+    for (const [x, y, icon, label] of props) {
+      const cell = cells[y][x];
+      if (cell.kind === "wall" || cell.kind === "exit" || cell.feature === "upgrade") continue;
+      const room = cell.room || "hall";
+      set(x, y, {
+        kind: "floor",
+        room,
+        feature: "prop",
+        icon,
+        label: `${INTERIOR_ROOM_LABELS[room] || "Room"} — ${label}`,
+      });
+    }
+
+    const tiles = [];
+    for (let y = 0; y < INTERIOR_ROWS; y++) {
+      for (let x = 0; x < INTERIOR_COLS; x++) {
+        const cell = cells[y][x];
+        tiles.push({
+          x,
+          y,
+          kind: cell.kind,
+          room: cell.room,
+          feature: cell.feature,
+          icon: cell.icon,
+          label: cell.label,
+          node: null,
+          machine: null,
+          hp: 0,
+          maxHp: 0,
+          tier: t,
+        });
+      }
+    }
+    return tiles;
+  }
+
+  function getActiveTile(gameState, x, y) {
+    if (!gameState) return null;
+    if (isInsideBase(gameState)) {
+      if (x < 0 || y < 0 || x >= INTERIOR_COLS || y >= INTERIOR_ROWS) return null;
+      return gameState.interiorTiles?.[y * INTERIOR_COLS + x] || null;
+    }
+    return getTile(gameState, x, y);
+  }
+
+  function isInteriorWalkable(tile) {
+    if (!tile) return false;
+    return tile.kind === "floor" || tile.kind === "exit" || tile.kind === "upgrade";
+  }
+
+  function normalizePlayer(gameState) {
+    if (!gameState) return;
+    if (isInsideBase(gameState)) {
+      const fallback = interiorSpawnPos();
+      const raw = gameState.player;
+      const x = Number.isFinite(raw?.x) ? Math.floor(raw.x) : fallback.x;
+      const y = Number.isFinite(raw?.y) ? Math.floor(raw.y) : fallback.y;
+      gameState.player = {
+        x: Math.max(0, Math.min(INTERIOR_COLS - 1, x)),
+        y: Math.max(0, Math.min(INTERIOR_ROWS - 1, y)),
+      };
+      return;
+    }
+    const fallback = defaultPlayerPos();
+    const raw = gameState.player;
+    const x = Number.isFinite(raw?.x) ? Math.floor(raw.x) : fallback.x;
+    const y = Number.isFinite(raw?.y) ? Math.floor(raw.y) : fallback.y;
+    gameState.player = {
+      x: Math.max(0, Math.min(COLS - 1, x)),
+      y: Math.max(0, Math.min(ROWS - 1, y)),
+    };
+  }
+
+  function normalizeInsideBase(gameState) {
+    if (!gameState) return;
+    gameState.insideBase = Boolean(gameState.insideBase);
+    if (!gameState.insideBase) {
+      gameState.interiorTiles = null;
+      gameState.outdoorPlayer = null;
+      return;
+    }
+    const base = gameState.machines?.find((m) => m?.type === "base");
+    if (!base) {
+      gameState.insideBase = false;
+      gameState.interiorTiles = null;
+      gameState.outdoorPlayer = null;
+      return;
+    }
+    if (
+      !gameState.outdoorPlayer ||
+      !Number.isFinite(gameState.outdoorPlayer.x) ||
+      !Number.isFinite(gameState.outdoorPlayer.y)
+    ) {
+      const w = base.w || getStructureSize("base").w;
+      const h = base.h || getStructureSize("base").h;
+      gameState.outdoorPlayer = {
+        x: base.x + Math.floor(w / 2),
+        y: base.y + Math.floor(h / 2),
+      };
+    }
+    rebuildInteriorMap(gameState);
+  }
+
+  /** Chebyshev reach 1 → 3×3 area centered on the player (including their tile). */
+  const PLAYER_REACH = 1;
+
+  function isInPlayerReach(gameState, x, y) {
+    if (!gameState) return false;
+    normalizePlayer(gameState);
+    const dx = Math.abs(Math.floor(x) - gameState.player.x);
+    const dy = Math.abs(Math.floor(y) - gameState.player.y);
+    return Math.max(dx, dy) <= PLAYER_REACH;
+  }
+
+  function toastOutOfReach(gameState) {
+    setToast(gameState, "Too far — stand in a 3×3 of that tile (WASD)");
+  }
+
+  function monsterAt(gameState, x, y, except = null) {
+    if (!gameState || !Array.isArray(gameState.monsters)) return null;
+    return (
+      gameState.monsters.find((m) => m && m !== except && m.x === x && m.y === y) || null
+    );
+  }
+
+  /** Live trees / rocks / ores / carrots — blocks both you and monsters. */
+  function terrainBlocksMovement(tile) {
+    return Boolean(tile?.node && tile.hp > 0);
+  }
+
+  /** Empty land or Iron Base floor — no live resources, other structures, or monsters. */
+  function isWalkableTile(tile, gameState) {
+    if (!tile) return false;
+    if (gameState && isInsideBase(gameState)) return isInteriorWalkable(tile);
+    // You may walk on Iron Base; other buildings block.
+    if (tile.machine && tile.machine !== "base") return false;
+    if (terrainBlocksMovement(tile)) return false;
+    if (gameState && monsterAt(gameState, tile.x, tile.y)) return false;
+    return true;
+  }
+
+  function isPlayerOnBase(gameState) {
+    if (!gameState) return false;
+    if (isInsideBase(gameState)) return true;
+    normalizePlayer(gameState);
+    const tile = getTile(gameState, gameState.player.x, gameState.player.y);
+    return tile?.machine === "base";
+  }
+
+  /** If standing on a blocked tile (regrowth, old save), slide to nearest empty land. */
+  function ensurePlayerOnWalkable(gameState) {
+    if (!gameState) return;
+    normalizePlayer(gameState);
+    const here = getActiveTile(gameState, gameState.player.x, gameState.player.y);
+    if (isWalkableTile(here, gameState)) return;
+    const ox = gameState.player.x;
+    const oy = gameState.player.y;
+    const { cols, rows } = activeMapSize(gameState);
+    let best = null;
+    let bestDist = Infinity;
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const tile = getActiveTile(gameState, x, y);
+        if (!isWalkableTile(tile, gameState)) continue;
+        const dist = Math.abs(x - ox) + Math.abs(y - oy);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = { x, y };
+        }
+      }
+    }
+    if (best) gameState.player = best;
+    else gameState.player = isInsideBase(gameState) ? interiorSpawnPos() : defaultPlayerPos();
+  }
+
+  function hungerMax() {
+    return GameData.hunger?.max ?? 10000;
+  }
+
+  function hungerPointsPerPercent() {
+    return GameData.hunger?.pointsPerPercent ?? 100;
+  }
+
+  function hungerPercent(points) {
+    return Math.max(0, Math.min(100, Math.floor((points || 0) / hungerPointsPerPercent())));
+  }
+
+  function healthMax() {
+    return GameData.health?.max ?? 10000;
+  }
+
+  function healthPointsPerPercent() {
+    return GameData.health?.pointsPerPercent ?? 100;
+  }
+
+  function healthPercent(points) {
+    return Math.max(0, Math.min(100, Math.floor((points || 0) / healthPointsPerPercent())));
+  }
+
+  function normalizeHunger(gameState) {
+    if (!gameState) return;
+    const max = hungerMax();
+    const raw = Number(gameState.hunger);
+    gameState.hunger = Number.isFinite(raw) ? Math.max(0, Math.min(max, Math.floor(raw))) : max;
+    const warnAt = (GameData.hunger?.warnPercent ?? 5) * hungerPointsPerPercent();
+    if (gameState.hunger > warnAt) gameState.hungerWarned = false;
+    else if (typeof gameState.hungerWarned !== "boolean") gameState.hungerWarned = true;
+  }
+
+  function normalizeHealth(gameState) {
+    if (!gameState) return;
+    const max = healthMax();
+    const raw = Number(gameState.health);
+    gameState.health = Number.isFinite(raw) ? Math.max(0, Math.min(max, Math.floor(raw))) : max;
+    const warnAt = (GameData.health?.warnPercent ?? 5) * healthPointsPerPercent();
+    if (gameState.health > warnAt) gameState.healthWarned = false;
+    else if (typeof gameState.healthWarned !== "boolean") gameState.healthWarned = true;
+  }
+
+  function hungerActionCost() {
+    return GameData.hunger?.actionCost ?? GameData.hunger?.hitCost ?? 50;
+  }
+
+  function applyHungerCost(gameState, cost) {
+    if (!gameState || !cost) return;
+    normalizeHunger(gameState);
+    gameState.hunger = Math.max(0, gameState.hunger - cost);
+    const warnPct = GameData.hunger?.warnPercent ?? 5;
+    const pct = hungerPercent(gameState.hunger);
+    if (pct <= warnPct && !gameState.hungerWarned) {
+      gameState.hungerWarned = true;
+      setToast(
+        gameState,
+        "You're starving — eat something (Apple, Carrot). Drop food on Eat in inventory."
+      );
+    }
+    if (pct > warnPct) gameState.hungerWarned = false;
+  }
+
+  function flashDamageVignette() {
+    const el = document.getElementById("damage-flash");
+    if (!el) return;
+    // Keep on <body> so parent screens/modals never clip it.
+    if (el.parentElement !== document.body) document.body.appendChild(el);
+    el.classList.remove("is-active");
+    // Force style flush so re-adding is-active always restarts the keyframes.
+    void el.offsetWidth;
+    el.classList.add("is-active");
+    const onEnd = (event) => {
+      if (event.target !== el || event.animationName !== "damage-vignette") return;
+      el.classList.remove("is-active");
+      el.removeEventListener("animationend", onEnd);
+    };
+    el.addEventListener("animationend", onEnd);
+  }
+
+  function applyHealthCost(gameState, cost) {
+    if (!gameState || !cost) return;
+    normalizeHealth(gameState);
+    const before = gameState.health;
+    gameState.health = Math.max(0, gameState.health - cost);
+    if (gameState.health < before) flashDamageVignette();
+    if (before > 0 && gameState.health <= 0) {
+      handlePlayerDeath(gameState);
+      return;
+    }
+    const warnPct = GameData.health?.warnPercent ?? 5;
+    const pct = healthPercent(gameState.health);
+    if (pct <= warnPct && !gameState.healthWarned) {
+      gameState.healthWarned = true;
+      setToast(gameState, "Health is low — eat something to recover.");
+    }
+    if (pct > warnPct) gameState.healthWarned = false;
+  }
+
+  function applyHealthGain(gameState, amount) {
+    if (!gameState || !amount) return;
+    normalizeHealth(gameState);
+    gameState.health = Math.min(healthMax(), gameState.health + amount);
+    if (healthPercent(gameState.health) > (GameData.health?.warnPercent ?? 5)) {
+      gameState.healthWarned = false;
+    }
+  }
+
+  /** False when HP is 0 — blocks actions (death should have already fired). */
+  function canActWithHealth(gameState) {
+    if (!gameState) return false;
+    normalizeHealth(gameState);
+    if (gameState.health > 0) return true;
+    setToast(gameState, "You're dead — wait for respawn");
+    return false;
+  }
+
+  function rememberActionTile(gameState, x, y) {
+    if (!gameState || !Number.isInteger(x) || !Number.isInteger(y)) return;
+    gameState.lastActionTile = { x, y };
+  }
+
+  function findDeathCrateSpot(gameState) {
+    const startX = Number.isInteger(gameState.lastActionTile?.x)
+      ? gameState.lastActionTile.x
+      : Math.floor(COLS / 2);
+    const startY = Number.isInteger(gameState.lastActionTile?.y)
+      ? gameState.lastActionTile.y
+      : Math.floor(ROWS / 2);
+
+    const tryTile = (x, y) => {
+      if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return null;
+      const tile = gameState.tiles[y * COLS + x];
+      if (!tile || tile.machine) return null;
+      return { x, y, tile };
+    };
+
+    const first = tryTile(startX, startY);
+    if (first) return first;
+
+    for (let radius = 1; radius < Math.max(COLS, ROWS); radius++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
+          const hit = tryTile(startX + dx, startY + dy);
+          if (hit) return hit;
+        }
+      }
+    }
+    return null;
+  }
+
+  function snapshotBagLoot(gameState) {
+    ensureBag(gameState);
+    const loot = [];
+    for (let i = 0; i < gameState.bag.length; i++) {
+      const stack = gameState.bag[i];
+      if (stack && stack.count > 0) loot.push({ id: stack.id, count: stack.count });
+      gameState.bag[i] = null;
+    }
+    rebuildInventoryFromBag(gameState);
+    return loot;
+  }
+
+  function addItemWithRemainder(gameState, id, count) {
+    if (!id || count < 1) return 0;
+    const before = gameState.inventory[id] || 0;
+    addItem(gameState, id, count);
+    const after = gameState.inventory[id] || 0;
+    return Math.max(0, count - (after - before));
+  }
+
+  function lootDeathCrate(gameState, tile) {
+    if (!gameState || !tile || tile.machine !== "deathCrate") return false;
+    const machine = gameState.machines.find(
+      (m) => m.type === "deathCrate" && m.x === tile.x && m.y === tile.y
+    );
+    if (!machine) return false;
+    if (!Array.isArray(machine.loot)) machine.loot = [];
+
+    const remaining = [];
+    let recovered = 0;
+    for (const stack of machine.loot) {
+      if (!stack?.id || !(stack.count > 0)) continue;
+      const left = addItemWithRemainder(gameState, stack.id, stack.count);
+      recovered += stack.count - left;
+      if (left > 0) remaining.push({ id: stack.id, count: left });
+    }
+    machine.loot = remaining;
+
+    if (remaining.length === 0) {
+      gameState.machines = gameState.machines.filter(
+        (m) => !(m.type === "deathCrate" && m.x === tile.x && m.y === tile.y)
+      );
+      tile.machine = null;
+      if (!tile.node) tile.kind = "grass";
+      else tile.kind = "node";
+      setToast(
+        gameState,
+        recovered > 0 ? "Recovered your items from the death crate" : "Death crate was empty"
+      );
+    } else {
+      setToast(gameState, "Inventory full — some items remain in the death crate");
+    }
+    return true;
+  }
+
+  function handlePlayerDeath(gameState) {
+    if (!gameState || gameState._handlingDeath) return;
+    gameState._handlingDeath = true;
+    try {
+      if (isInsideBase(gameState)) {
+        leaveBaseInterior(gameState, { silent: true, skipRender: true });
+      }
+      clearBuildMode();
+      if (typeof closePlayerInvUi === "function") closePlayerInvUi();
+      if (typeof closeSmelterUi === "function") closeSmelterUi();
+      if (typeof closeGeneratorUi === "function") closeGeneratorUi();
+      if (typeof closeCraftTableUi === "function") closeCraftTableUi();
+      if (typeof closeRecipesUi === "function") closeRecipesUi();
+      if (typeof closeBuildUi === "function") closeBuildUi();
+
+      // Pull crafting-grid items back into the bag before the drop.
+      if (Array.isArray(playerCraftGrid)) {
+        playerCraftGrid = normalizeCraftGrid(playerCraftGrid, 4);
+        returnGridToInv(playerCraftGrid);
+      }
+      for (const m of gameState.machines) {
+        if (m?.type === "craftingStation") {
+          ensureCraftTableShape(m);
+          returnGridToInv(m.craftGrid);
+        }
+      }
+
+      const loot = snapshotBagLoot(gameState);
+      let spot = findDeathCrateSpot(gameState);
+      if (!spot) {
+        // Map packed — merge into an existing crate, or force center after clearing nothing.
+        const existing = gameState.machines.find((m) => m.type === "deathCrate");
+        if (existing) {
+          existing.loot = [...(existing.loot || []), ...loot];
+        } else {
+          const x = Math.floor(COLS / 2);
+          const y = Math.floor(ROWS / 2);
+          const tile = gameState.tiles[y * COLS + x];
+          if (tile?.machine) {
+            // Last resort: keep loot on a crate even if we overwrite a marker tile
+            // only when it's already a death crate; otherwise append to bag again.
+            for (const stack of loot) addItem(gameState, stack.id, stack.count);
+            setToast(gameState, "You died — no space for a death crate (items kept)");
+          } else {
+            spot = { x, y, tile };
+          }
+        }
+      }
+
+      if (spot) {
+        spot.tile.machine = "deathCrate";
+        if (!spot.tile.node) spot.tile.kind = "machine";
+        gameState.machines.push({
+          type: "deathCrate",
+          x: spot.x,
+          y: spot.y,
+          loot,
+          timer: 0,
+          interval: 0,
+        });
+      }
+
+      const hpPct = GameData.health?.respawnHealthPercent ?? 50;
+      const foodPct = GameData.health?.respawnHungerPercent ?? 40;
+      gameState.health = Math.floor((healthMax() * hpPct) / 100);
+      gameState.hunger = Math.floor((hungerMax() * foodPct) / 100);
+      gameState.healthWarned = false;
+      gameState.hungerWarned = false;
+      gameState.player = defaultPlayerPos();
+      ensurePlayerOnWalkable(gameState);
+      setToast(
+        gameState,
+        loot.length
+          ? "You died! Collect your items from the death crate (📦)."
+          : "You died and respawned."
+      );
+      if (typeof render === "function" && state === gameState) render();
+    } finally {
+      gameState._handlingDeath = false;
+    }
+  }
+
+  function isFoodItem(id) {
+    return Boolean(GameData.getItem(id)?.food);
+  }
+
+  /** Food restores 10% — refuse when already at 90%+ hunger (no waste). */
+  function foodFullnessThresholdPercent() {
+    return 100 - (GameData.hunger?.foodRestorePercent ?? 10);
+  }
+
+  function canAcceptFood(gameState) {
+    if (!gameState) return false;
+    normalizeHunger(gameState);
+    return hungerPercent(gameState.hunger) < foodFullnessThresholdPercent();
+  }
+
+  function toastFoodFull(gameState) {
+    setToast(
+      gameState,
+      `Already full — eat only below ${foodFullnessThresholdPercent()}% food`
+    );
+  }
+
+  function restoreHungerFromFood(gameState, id) {
+    normalizeHunger(gameState);
+    normalizeHealth(gameState);
+    const hungerPct = GameData.hunger?.foodRestorePercent ?? 10;
+    const healthPct = GameData.health?.foodRestorePercent ?? 10;
+    gameState.hunger = Math.min(
+      hungerMax(),
+      gameState.hunger + hungerPct * hungerPointsPerPercent()
+    );
+    gameState.health = Math.min(
+      healthMax(),
+      gameState.health + healthPct * healthPointsPerPercent()
+    );
+    if (hungerPercent(gameState.hunger) > (GameData.hunger?.warnPercent ?? 5)) {
+      gameState.hungerWarned = false;
+    }
+    if (healthPercent(gameState.health) > (GameData.health?.warnPercent ?? 5)) {
+      gameState.healthWarned = false;
+    }
+    window.KeaghanSfx?.playFoodPop?.();
+    const name = GameData.getItem(id).name;
+    setToast(
+      gameState,
+      `Ate ${name} · +${hungerPct}% food · +${healthPct}% HP`
+    );
+  }
+
+  function eatFoodFromBag(gameState, bagIndex) {
+    if (!gameState) return false;
+    ensureBag(gameState);
+    const stack = gameState.bag[bagIndex];
+    if (!stack || stack.count < 1 || !isFoodItem(stack.id)) return false;
+    if (!canAcceptFood(gameState)) {
+      toastFoodFull(gameState);
+      return false;
+    }
+    const id = stack.id;
+    stack.count -= 1;
+    if (stack.count <= 0) gameState.bag[bagIndex] = null;
+    rebuildInventoryFromBag(gameState);
+    restoreHungerFromFood(gameState, id);
+    return true;
+  }
+
+  /** Eat one food item from a drag (bag or craft grid). */
+  function eatFromCraftDrag(drag) {
+    if (!state || !drag?.itemId) return false;
+    if (!isFoodItem(drag.itemId)) {
+      setToast(state, "Only food goes in Eat (Apple, Carrot)");
+      return false;
+    }
+    if (!canAcceptFood(state)) {
+      toastFoodFull(state);
+      return false;
+    }
+    if (drag.from === "bag") {
+      return eatFoodFromBag(state, drag.bagIndex);
+    }
+    if (drag.from === "grid") {
+      const bench = getActiveBench();
+      const stack = bench?.grid?.[drag.gridIndex];
+      if (!stack || stack.missing || stack.count < 1 || !isFoodItem(stack.id)) return false;
+      const id = stack.id;
+      stack.count -= 1;
+      if (stack.count <= 0) bench.grid[drag.gridIndex] = null;
+      restoreHungerFromFood(state, id);
+      return true;
+    }
+    return false;
   }
 
   function loadState() {
@@ -335,16 +1107,86 @@ window.IslandFoundry = (() => {
         },
       };
       ensureBag(state);
+      normalizeHunger(state);
+      normalizeHealth(state);
+      normalizeMonsters(state);
+      normalizeBaseTiers(state);
+      normalizeInsideBase(state);
+      if (!isInsideBase(state)) {
+        normalizePlayer(state);
+        ensurePlayerOnWalkable(state);
+      }
+      ensureFoodNodes(state);
       return state;
-    } catch {
-      return createState();
+    } catch (err) {
+      console.error("[IslandFoundry] loadState failed — keeping disk save, using fresh session", err);
+      const fresh = createState();
+      // Prevent autosave from overwriting a good save after a load bug.
+      fresh._skipPersist = true;
+      return fresh;
     }
   }
 
+  function menusBlockPlayerMove() {
+    return Boolean(
+      openPlayerInv ||
+        openCraftTable ||
+        openSmelter ||
+        openGenerator ||
+        openRecipes ||
+        openBuildMenu ||
+        openBaseEnterPrompt ||
+        openSleepPrompt
+    );
+  }
+
+  /** WASD step — empty land only. Click still harvests / opens machines in 3×3 reach. */
+  function tryMovePlayer(dx, dy) {
+    if (!state || !playActive || gamePaused || menusBlockPlayerMove()) return false;
+    ensurePlayerOnWalkable(state);
+    const nx = state.player.x + dx;
+    const ny = state.player.y + dy;
+    const { cols, rows } = activeMapSize(state);
+    if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) return false;
+    if (nx === state.player.x && ny === state.player.y) return false;
+    const dest = getActiveTile(state, nx, ny);
+    if (!isWalkableTile(dest, state)) {
+      setToast(
+        state,
+        !isInsideBase(state) && monsterAt(state, nx, ny)
+          ? "A monster blocks the way"
+          : isInsideBase(state)
+            ? "Can't walk through the wall"
+            : "Can't walk there — only empty land"
+      );
+      renderHud();
+      return false;
+    }
+    state.player.x = nx;
+    state.player.y = ny;
+    if (!isInsideBase(state)) rememberActionTile(state, nx, ny);
+    renderWorld();
+    refreshBuildPreview();
+    saveState(state);
+    return true;
+  }
+
   function saveState(gameState) {
-    if (gameState) ensureBag(gameState);
-    const { _poweredTiles, toast, toastUntil, ...persist } = gameState;
-    localStorage.setItem(saveKey(), JSON.stringify(persist));
+    if (!gameState || gameState._skipPersist) return;
+    ensureBag(gameState);
+    const {
+      _poweredTiles,
+      toast,
+      toastUntil,
+      _handlingDeath,
+      _skipPersist,
+      ...persist
+    } = gameState;
+    try {
+      localStorage.setItem(saveKey(), JSON.stringify(persist));
+    } catch (err) {
+      console.error("[IslandFoundry] saveState failed", err);
+    }
   }
 
   function canAfford(state, cost) {
@@ -423,17 +1265,11 @@ window.IslandFoundry = (() => {
     let left = Math.min(amount, stack.count);
     let moved = 0;
 
+    // Craft cells never stack — only fill empty slots, 1 item each.
     for (let i = 0; i < bench.size && left > 0; i++) {
       const cell = bench.grid[i];
-      if (!cell || cell.id !== stack.id) continue;
-      cell.count += 1;
-      left -= 1;
-      moved += 1;
-      stack.count -= 1;
-    }
-    for (let i = 0; i < bench.size && left > 0; i++) {
-      if (bench.grid[i]) continue;
-      bench.grid[i] = { id: stack.id, count: 1 };
+      if (cell && !cell.missing && cell.count > 0) continue;
+      bench.grid[i] = { id: stack.id, count: CRAFT_SLOT_MAX };
       left -= 1;
       moved += 1;
       stack.count -= 1;
@@ -441,6 +1277,36 @@ window.IslandFoundry = (() => {
     if (stack.count <= 0) state.bag[slotIndex] = null;
     rebuildInventoryFromBag(state);
     return moved;
+  }
+
+  /** Place exactly one item from a bag slot into a specific craft cell. */
+  function placeOneFromBagIntoCraftSlot(bagIndex, gridIndex) {
+    const bench = getActiveBench();
+    ensureBag(state);
+    const stack = state.bag[bagIndex];
+    if (!bench || !stack || stack.count < 1) return 0;
+    if (gridIndex < 0 || gridIndex >= bench.size) return 0;
+
+    const cell = bench.grid[gridIndex];
+    if (cell && !cell.missing && cell.count > 0) {
+      if (cell.id === stack.id) return 0; // already full
+      // Swap: craft keeps 1 of the bag item; leftover bag stack returns to inventory.
+      const craftId = cell.id;
+      const craftCount = Math.min(CRAFT_SLOT_MAX, cell.count);
+      const bagId = stack.id;
+      const bagLeft = stack.count - 1;
+      bench.grid[gridIndex] = { id: bagId, count: CRAFT_SLOT_MAX };
+      state.bag[bagIndex] = { id: craftId, count: craftCount };
+      rebuildInventoryFromBag(state);
+      if (bagLeft > 0) addItem(state, bagId, bagLeft);
+      return 1;
+    }
+
+    bench.grid[gridIndex] = { id: stack.id, count: CRAFT_SLOT_MAX };
+    stack.count -= 1;
+    if (stack.count <= 0) state.bag[bagIndex] = null;
+    rebuildInventoryFromBag(state);
+    return 1;
   }
 
   function placeStackInBagSlot(slotIndex, itemId, count) {
@@ -525,12 +1391,15 @@ window.IslandFoundry = (() => {
     state.toastUntil = performance.now() + 2200;
   }
 
-  const DAWN_MINUTES = 6 * 60; // 6:00 a.m.
+  const DAWN_MINUTES = 6 * 60; // 6:00 a.m. — monsters flee
+  const DUSK_MINUTES = 18 * 60; // 6:00 p.m. — monsters appear
 
-  const WEATHER_TICK_MINUTES = 10;
+  const WEATHER_TICK_MINUTES = 30;
   const WEATHER_RAIN_MINUTES = 5 * 60;
   const WEATHER_THUNDER_MINUTES = 5 * 60;
   const WEATHER_THUNDER_AFTERMATH_RAIN_MINUTES = 3 * 60;
+  const WEATHER_CLEAR_RAIN_CHANCE = 0.05;
+  const WEATHER_RAIN_THUNDER_CHANCE = 0.05;
 
   function normalizeWeather(weather) {
     const kind = weather?.kind === "rain" || weather?.kind === "thunder" ? weather.kind : null;
@@ -541,8 +1410,11 @@ window.IslandFoundry = (() => {
       // Migrate older hour-based weather saves.
       minutesLeft = Math.max(0, Math.floor(weather.hoursLeft) * 60);
     }
-    if (!kind || minutesLeft < 1) return { kind: null, minutesLeft: 0 };
-    return { kind, minutesLeft };
+    const thunderLocked = Boolean(weather?.thunderLocked);
+    if (!kind || minutesLeft < 1) {
+      return { kind: null, minutesLeft: 0, thunderLocked: false };
+    }
+    return { kind, minutesLeft, thunderLocked };
   }
 
   function ensureWeather(gameState) {
@@ -550,7 +1422,7 @@ window.IslandFoundry = (() => {
     gameState.weather = normalizeWeather(gameState.weather);
   }
 
-  /** How many 10-minute boundaries are crossed from prev → next. */
+  /** How many :00 / :30 clock boundaries are crossed from prev → next. */
   function weatherTicksCrossed(prev, next) {
     const day = 24 * 60;
     if (prev === next) return 0;
@@ -562,43 +1434,286 @@ window.IslandFoundry = (() => {
   }
 
   /**
-   * Each 10 in-game minutes:
-   * - if rain/thunder is active, only count down (no new weather rolls)
-   * - thunder ending becomes rain for 3 hours
-   * - clear skies only: 1% thunder (5h) else 5% rain (5h)
+   * On each clock :00 / :30:
+   * - clear skies: 5% chance of rain (5h)
+   * - raining: 5% chance to become thunder (unless thunderLocked)
+   * - thunder ending → rain for 3h with thunderLocked (cannot return to thunder)
    */
   function tickWeatherInterval(gameState) {
     ensureWeather(gameState);
     const w = gameState.weather;
 
-    // Pause rain/thunder chances until the sky is clear again.
-    if (w.kind) {
+    if (w.kind === "thunder") {
       w.minutesLeft = Math.max(0, w.minutesLeft - WEATHER_TICK_MINUTES);
       if (w.minutesLeft > 0) return;
+      w.kind = "rain";
+      w.minutesLeft = WEATHER_THUNDER_AFTERMATH_RAIN_MINUTES;
+      w.thunderLocked = true;
+      setToast(gameState, "The storm eases into rain");
+      return;
+    }
 
-      if (w.kind === "thunder") {
-        w.kind = "rain";
-        w.minutesLeft = WEATHER_THUNDER_AFTERMATH_RAIN_MINUTES;
-        setToast(gameState, "The storm eases into rain");
+    if (w.kind === "rain") {
+      if (!w.thunderLocked && Math.random() < WEATHER_RAIN_THUNDER_CHANCE) {
+        w.kind = "thunder";
+        w.minutesLeft = WEATHER_THUNDER_MINUTES;
+        setToast(gameState, "Thunder rolls in");
         return;
       }
 
+      w.minutesLeft = Math.max(0, w.minutesLeft - WEATHER_TICK_MINUTES);
+      if (w.minutesLeft > 0) return;
+
       w.kind = null;
       w.minutesLeft = 0;
+      w.thunderLocked = false;
       setToast(gameState, "The rain has stopped");
       return;
     }
 
-    // Clear skies — roll for new weather.
-    if (Math.random() < 0.01) {
-      w.kind = "thunder";
-      w.minutesLeft = WEATHER_THUNDER_MINUTES;
-      setToast(gameState, "Thunder rolls in");
-    } else if (Math.random() < 0.05) {
+    // Clear skies — only rain can start (thunder only upgrades from rain).
+    if (Math.random() < WEATHER_CLEAR_RAIN_CHANCE) {
       w.kind = "rain";
       w.minutesLeft = WEATHER_RAIN_MINUTES;
+      w.thunderLocked = false;
       setToast(gameState, "Rain begins to fall");
     }
+  }
+
+  function isNightTime(worldMinutes) {
+    const day = 24 * 60;
+    const m = ((Math.floor(worldMinutes) % day) + day) % day;
+    // Night: 6:00 p.m. … just before 6:00 a.m.
+    return m >= DUSK_MINUTES || m < DAWN_MINUTES;
+  }
+
+  function crossedTimeBoundary(prev, next, boundary) {
+    if (prev === next) return false;
+    if (prev < next) return prev < boundary && next >= boundary;
+    return false;
+  }
+
+  function crossedDawn(prev, next) {
+    return crossedTimeBoundary(prev, next, DAWN_MINUTES);
+  }
+
+  function crossedDusk(prev, next) {
+    return crossedTimeBoundary(prev, next, DUSK_MINUTES);
+  }
+
+  function clearNightMonsters(gameState, { toast } = {}) {
+    if (!gameState) return;
+    const had = Array.isArray(gameState.monsters) && gameState.monsters.length > 0;
+    gameState.monsters = [];
+    if (toast && had) setToast(gameState, "The monsters flee at dawn");
+  }
+
+  function monsterMaxHp() {
+    return Math.max(1, Math.floor(GameData.monsters?.maxHp ?? 20));
+  }
+
+  function normalizeMonsters(gameState) {
+    if (!gameState) return;
+    if (!Array.isArray(gameState.monsters)) gameState.monsters = [];
+    const maxHp = monsterMaxHp();
+    gameState.monsters = gameState.monsters
+      .filter(
+        (m) =>
+          m &&
+          Number.isFinite(m.x) &&
+          Number.isFinite(m.y) &&
+          m.x >= 0 &&
+          m.y >= 0 &&
+          m.x < COLS &&
+          m.y < ROWS
+      )
+      .map((m) => {
+        const rawHp = Number.isFinite(m.hp) ? Math.floor(m.hp) : maxHp;
+        return {
+          x: Math.floor(m.x),
+          y: Math.floor(m.y),
+          hp: Math.max(1, Math.min(maxHp, rawHp)),
+        };
+      });
+    if (!isNightTime(gameState.worldMinutes)) {
+      gameState.monsters = [];
+    }
+  }
+
+  function isMonsterSpawnTile(gameState, x, y) {
+    // Same blockers as movement (not player walkability — base is off-limits to them).
+    return isMonsterWalkable(gameState, x, y);
+  }
+
+  function spawnNightMonsters(gameState) {
+    if (!gameState) return;
+    const want = Math.max(1, Math.floor(GameData.monsters?.count ?? 3));
+    const edge = [];
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const onEdge = x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1;
+        if (!onEdge) continue;
+        if (isMonsterSpawnTile(gameState, x, y)) edge.push({ x, y });
+      }
+    }
+    // Fallback: any empty land if the rim is crowded.
+    const pool = edge.length ? edge : [];
+    if (!pool.length) {
+      for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+          if (isMonsterSpawnTile(gameState, x, y)) pool.push({ x, y });
+        }
+      }
+    }
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const maxHp = monsterMaxHp();
+    gameState.monsters = pool.slice(0, want).map((p) => ({ x: p.x, y: p.y, hp: maxHp }));
+    ensureMonstersOnWalkable(gameState);
+    if (gameState.monsters.length) {
+      setToast(gameState, "Night monsters emerge — stay alert until dawn!");
+    }
+  }
+
+  /**
+   * Monsters match the human for solid world blockers:
+   * no trees, rocks, ores, carrots, or buildings (Iron Base included).
+   * @param {object|null} exceptMonster — ignore this monster for occupancy (self).
+   */
+  function isMonsterWalkable(gameState, x, y, exceptMonster = null) {
+    const tile = getTile(gameState, x, y);
+    if (!tile) return false;
+    if (tile.machine) return false;
+    if (terrainBlocksMovement(tile)) return false;
+    if (monsterAt(gameState, x, y, exceptMonster)) return false;
+    normalizePlayer(gameState);
+    // Stay adjacent — don't stack on the player (reach damage still applies).
+    if (x === gameState.player.x && y === gameState.player.y) return false;
+    return true;
+  }
+
+  /** Nudge monsters off illegal tiles (e.g. after a building appears under them). */
+  function ensureMonstersOnWalkable(gameState) {
+    if (!gameState || !Array.isArray(gameState.monsters)) return;
+    for (const monster of gameState.monsters) {
+      if (!monster) continue;
+      if (isMonsterWalkable(gameState, monster.x, monster.y, monster)) continue;
+      let best = null;
+      let bestDist = Infinity;
+      for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+          if (!isMonsterWalkable(gameState, x, y, monster)) continue;
+          const dist = Math.abs(x - monster.x) + Math.abs(y - monster.y);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = { x, y };
+          }
+        }
+      }
+      if (best) {
+        monster.x = best.x;
+        monster.y = best.y;
+      }
+    }
+  }
+
+  function stepMonsterTowardPlayer(gameState, monster) {
+    normalizePlayer(gameState);
+    const px = gameState.player.x;
+    const py = gameState.player.y;
+    const dx = Math.sign(px - monster.x);
+    const dy = Math.sign(py - monster.y);
+    const tries = [];
+    if (dx || dy) {
+      tries.push({ x: monster.x + dx, y: monster.y + dy });
+      if (dx && dy) {
+        tries.push({ x: monster.x + dx, y: monster.y });
+        tries.push({ x: monster.x, y: monster.y + dy });
+      }
+    }
+    for (const step of tries) {
+      if (step.x < 0 || step.y < 0 || step.x >= COLS || step.y >= ROWS) continue;
+      if (!isMonsterWalkable(gameState, step.x, step.y, monster)) continue;
+      monster.x = step.x;
+      monster.y = step.y;
+      return;
+    }
+  }
+
+  function applyMonsterContactDamage(gameState) {
+    if (!gameState?.monsters?.length) return;
+    if (isInsideBase(gameState)) return;
+    normalizePlayer(gameState);
+    // Iron Base is a safe zone — monsters can't hurt you on it.
+    if (isPlayerOnBase(gameState)) return;
+    const touching = gameState.monsters.some((m) =>
+      isInPlayerReach(gameState, m.x, m.y)
+    );
+    if (!touching) return;
+    const pct = GameData.monsters?.damagePercentPerFiveMinutes ?? 2;
+    const dmg = Math.max(1, Math.floor((healthMax() * pct) / 100));
+    applyHealthCost(gameState, dmg);
+    if (gameState.health > 0) {
+      setToast(gameState, "A monster claws you!");
+    }
+  }
+
+  function tickMonsters(gameState, ticks = 1) {
+    if (!gameState || ticks < 1) return;
+    if (isInsideBase(gameState)) return;
+    if (!isNightTime(gameState.worldMinutes)) return;
+    normalizeMonsters(gameState);
+    if (!gameState.monsters.length) return;
+    for (let i = 0; i < ticks; i++) {
+      ensureMonstersOnWalkable(gameState);
+      for (const monster of gameState.monsters) {
+        stepMonsterTowardPlayer(gameState, monster);
+      }
+      applyMonsterContactDamage(gameState);
+      if (gameState.health <= 0) return;
+    }
+  }
+
+  /** Click a monster in 3×3 reach: fist = 1 HP, Iron Sword = one-shot (20 HP). */
+  function hitMonsterAt(gameState, x, y) {
+    if (!gameState || !isInPlayerReach(gameState, x, y)) return false;
+    const idx = gameState.monsters.findIndex((m) => m && m.x === x && m.y === y);
+    if (idx < 0) return false;
+    if (!canActWithHealth(gameState)) return false;
+
+    const monster = gameState.monsters[idx];
+    const maxHp = monsterMaxHp();
+    if (!Number.isFinite(monster.hp)) monster.hp = maxHp;
+
+    const tool = gameState.activeTool || "hand";
+    const sword = GameData.monsters?.swordTool || "ironSword";
+    const damage =
+      tool === sword
+        ? Math.max(1, Math.floor(GameData.monsters?.swordDamage ?? maxHp))
+        : Math.max(1, Math.floor(GameData.monsters?.fistDamage ?? 1));
+
+    monster.hp = Math.max(0, monster.hp - damage);
+    applyHungerCost(gameState, hungerActionCost());
+
+    if (monster.hp <= 0) {
+      gameState.monsters.splice(idx, 1);
+      setToast(
+        gameState,
+        gameState.monsters.length
+          ? "You slew a monster!"
+          : "You slew the last monster — for now"
+      );
+    } else {
+      setToast(
+        gameState,
+        tool === sword
+          ? `Monster ${monster.hp}/${maxHp}`
+          : `Fist hit! Monster ${monster.hp}/${maxHp} HP`
+      );
+    }
+    return true;
   }
 
   /** 0 = 12:00 a.m. … 720 = 12:00 p.m. Minutes wrap at 1440. */
@@ -607,19 +1722,33 @@ window.IslandFoundry = (() => {
     const prev = ((gameState.worldMinutes || 0) % day + day) % day;
     gameState.worldMinutes = (prev + minutes) % day;
     if (crossedDawn(prev, gameState.worldMinutes)) {
+      clearNightMonsters(gameState, { toast: true });
       regrowNodesAtDawn(gameState);
+    }
+    if (crossedDusk(prev, gameState.worldMinutes)) {
+      spawnNightMonsters(gameState);
     }
     const crossed = weatherTicksCrossed(prev, gameState.worldMinutes);
     for (let i = 0; i < crossed; i++) tickWeatherInterval(gameState);
     tickSmelters(gameState, minutes);
-  }
-
-  function crossedDawn(prev, next) {
-    // With +5 steps this is prev in [355..359] → next in [360..364].
-    if (prev === next) return false;
-    if (prev < next) return prev < DAWN_MINUTES && next >= DAWN_MINUTES;
-    // Wrapped past midnight in one step — can't reach 6:00 a.m. in a single +5.
-    return false;
+    // Hunger + HP ticks every 5 in-game minutes.
+    const step = 5;
+    const ticks = Math.floor(Math.max(0, minutes) / step);
+    if (ticks < 1) return;
+    const hungerDrain = ticks * (GameData.hunger?.passivePerFiveMinutes ?? 5);
+    applyHungerCost(gameState, hungerDrain);
+    normalizeHunger(gameState);
+    normalizeHealth(gameState);
+    if (gameState.hunger <= 0) {
+      // Starving: 1% of max HP per 5 in-game minutes.
+      const starvePct = GameData.health?.starvePercentPerFiveMinutes ?? 1;
+      const perTick = Math.max(1, Math.floor((healthMax() * starvePct) / 100));
+      applyHealthCost(gameState, ticks * perTick);
+    } else if (hungerPercent(gameState.hunger) >= (GameData.health?.regenHungerPercent ?? 50)) {
+      applyHealthGain(gameState, ticks * (GameData.health?.regenPerFiveMinutes ?? 10));
+    }
+    // Night hunters move + bite after vitals so death from claws still works.
+    if (gameState.health > 0) tickMonsters(gameState, ticks);
   }
 
   function regrowNodesAtDawn(gameState) {
@@ -652,6 +1781,8 @@ window.IslandFoundry = (() => {
     } else if (blocked > 0) {
       setToast(gameState, "Dawn: machines are blocking some nodes from growing");
     }
+    // A node may have grown under the player — nudge them onto empty land.
+    ensurePlayerOnWalkable(gameState);
   }
 
   function formatWorldTime(worldMinutes) {
@@ -734,7 +1865,132 @@ window.IslandFoundry = (() => {
     rain.appendChild(frag);
   }
 
-  function updateSkyBackground() {
+  /**
+   * Place a sky body on the same compass as the clock hand.
+   * Hand rotate(0)=up, 90=right, 180=down, 270=left — matches CSS clock.
+   */
+  function skyBodyPositionFromDegrees(degrees) {
+    const rad = (degrees * Math.PI) / 180;
+    // Match CSS clock rotate: 0=up, 90=right, 180=down, 270=left.
+    const sx = Math.sin(rad);
+    const sy = Math.cos(rad); // +1 up, -1 down
+    // Elliptical orbit so bodies stay readable over the landscape.
+    const left = 50 + sx * 42;
+    const top = 48 - sy * 36;
+    return { left, top, elevation: sy };
+  }
+
+  function skyBodyOpacity(elevation) {
+    // Soft horizon fade: visible near sunrise/sunset, full when high, hidden below.
+    return Math.max(0, Math.min(1, (elevation + 0.28) / 0.62));
+  }
+
+  function clearSkyBodyStyles(el) {
+    if (!el) return;
+    el.style.left = "";
+    el.style.top = "";
+    el.style.opacity = "";
+    el.style.transform = "";
+    el.style.background = "";
+  }
+
+  /** Mix two #rrggbb colors by t in [0,1]. */
+  function mixHex(a, b, t) {
+    const n = (hex) => {
+      const h = hex.replace("#", "");
+      return [
+        parseInt(h.slice(0, 2), 16),
+        parseInt(h.slice(2, 4), 16),
+        parseInt(h.slice(4, 6), 16),
+      ];
+    };
+    const A = n(a);
+    const B = n(b);
+    const u = Math.max(0, Math.min(1, t));
+    const c = A.map((v, i) => Math.round(v + (B[i] - v) * u));
+    return `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  /**
+   * Sky palette from sun elevation (-1..1) and whether the moon is lighting.
+   * Warm near horizon, blue midday, deep blue at night (never pure black).
+   */
+  function skyPalette(elevation, useSun) {
+    if (useSun) {
+      const day = Math.max(0, Math.min(1, (elevation + 0.15) / 1.15));
+      const horizon = Math.max(0, 1 - Math.abs(elevation) / 0.55);
+      const top = mixHex(mixHex("#3a4a6a", "#6eb7e0", day), "#ffb070", horizon * 0.55);
+      const mid = mixHex(mixHex("#c47a4a", "#9ed0c0", day), "#f0b429", horizon * 0.65);
+      const bottom = mixHex(mixHex("#5a3a28", "#6a9a70", day), "#c47a4a", horizon * 0.45);
+      const glowAlpha = (0.28 + day * 0.28 + horizon * 0.2).toFixed(2);
+      const glowRgb = horizon > 0.35 ? "255, 150, 70" : "255, 235, 170";
+      return {
+        top,
+        mid,
+        bottom,
+        glow: `rgba(${glowRgb}, ${glowAlpha})`,
+      };
+    }
+    const nightLift = Math.max(0, Math.min(1, (elevation + 0.1) / 1.1));
+    return {
+      top: mixHex("#152038", "#2a3a58", nightLift),
+      mid: mixHex("#1a2838", "#2e4058", nightLift),
+      bottom: mixHex("#142028", "#1c2c30", nightLift),
+      glow: `rgba(160, 190, 255, ${(0.16 + nightLift * 0.16).toFixed(2)})`,
+    };
+  }
+
+  function updateSkyWash(bodyPos, elevation, useSun) {
+    const wash = document.querySelector(".sky__wash");
+    const glow = document.getElementById("sky-glow");
+    if (!wash) return;
+
+    const palette = skyPalette(elevation, useSun);
+    const x = bodyPos.left.toFixed(2);
+    const y = bodyPos.top.toFixed(2);
+    // Bright spot is locked to the sun/moon — not a fixed phase corner.
+    wash.style.background = [
+      `radial-gradient(ellipse 58% 50% at ${x}% ${y}%, ${palette.glow}, transparent 64%)`,
+      `linear-gradient(180deg, ${palette.top} 0%, ${palette.mid} 48%, ${palette.bottom} 100%)`,
+    ].join(", ");
+
+    if (glow) {
+      const opacity = skyBodyOpacity(elevation) * (useSun ? 0.9 : 0.7);
+      glow.style.left = `${bodyPos.left}%`;
+      glow.style.top = `${bodyPos.top}%`;
+      glow.style.opacity = String(opacity);
+      glow.style.background = `radial-gradient(ellipse at center, ${palette.glow} 0%, transparent 70%)`;
+    }
+  }
+
+  function updateSkyBodies(handDegrees) {
+    const sun = document.querySelector(".sky__sun");
+    const moon = document.querySelector(".sky__moon");
+    if (!sun || !moon) return;
+
+    const sunPos = skyBodyPositionFromDegrees(handDegrees);
+    const moonPos = skyBodyPositionFromDegrees(handDegrees + 180);
+    const sunOpacity = skyBodyOpacity(sunPos.elevation);
+    const moonOpacity = skyBodyOpacity(moonPos.elevation);
+    const sunScale = 0.9 + sunOpacity * 0.18;
+    const moonScale = 0.9 + moonOpacity * 0.16;
+
+    sun.style.left = `${sunPos.left}%`;
+    sun.style.top = `${sunPos.top}%`;
+    sun.style.opacity = String(sunOpacity);
+    sun.style.transform = `translate(-50%, -50%) scale(${sunScale})`;
+
+    moon.style.left = `${moonPos.left}%`;
+    moon.style.top = `${moonPos.top}%`;
+    moon.style.opacity = String(moonOpacity);
+    moon.style.transform = `translate(-50%, -50%) scale(${moonScale})`;
+
+    const useSun = sunOpacity >= moonOpacity;
+    const lit = useSun ? sunPos : moonPos;
+    updateSkyWash(lit, lit.elevation, useSun);
+  }
+
+  function updateSkyBackground(handDegrees = null) {
     const sky = document.getElementById("sky-layer");
     const atmo = document.querySelector(".atmosphere");
     if (!sky || !atmo) return;
@@ -745,6 +2001,12 @@ window.IslandFoundry = (() => {
       sky.removeAttribute("data-weather");
       atmo.removeAttribute("data-sky-phase");
       atmo.removeAttribute("data-weather");
+      clearSkyBodyStyles(document.querySelector(".sky__sun"));
+      clearSkyBodyStyles(document.querySelector(".sky__moon"));
+      clearSkyBodyStyles(document.getElementById("sky-glow"));
+      window.KeaghanSfx?.setWeather?.(null);
+      window.KeaghanSfx?.setWeatherMuffled?.(false);
+      // Keep last wash colors — clearing background caused a black flash.
       return;
     }
 
@@ -753,17 +2015,57 @@ window.IslandFoundry = (() => {
 
     const phase = skyPhaseFromMinutes(state.worldMinutes);
     const weather = state.weather?.kind || "";
-    sky.hidden = false;
+    const degrees =
+      handDegrees == null ? clockHandDegrees(state.worldMinutes) : handDegrees;
+
+    // Paint + show sky before touching atmosphere attrs (old solid phase fills flashed black).
+    updateSkyBodies(degrees);
     if (sky.dataset.phase !== phase) sky.dataset.phase = phase;
     if ((sky.dataset.weather || "") !== weather) {
       if (weather) sky.dataset.weather = weather;
       else sky.removeAttribute("data-weather");
     }
+    sky.hidden = false;
+
     if (atmo.dataset.skyPhase !== phase) atmo.dataset.skyPhase = phase;
     if ((atmo.dataset.weather || "") !== weather) {
       if (weather) atmo.dataset.weather = weather;
       else atmo.removeAttribute("data-weather");
     }
+
+    // Rain loop while raining/storming; thunder cracks on the lightning cycle.
+    // Indoors: keep the weather audible but muffled (walls dampen it).
+    window.KeaghanSfx?.setWeather?.(weather || null);
+    window.KeaghanSfx?.setWeatherMuffled?.(isInsideBase(state));
+  }
+
+  function renderVitalsMeter(kind) {
+    if (!state) return;
+    const isHealth = kind === "health";
+    if (isHealth) normalizeHealth(state);
+    else normalizeHunger(state);
+    const points = isHealth ? state.health : state.hunger;
+    const max = isHealth ? healthMax() : hungerMax();
+    const pct = isHealth ? healthPercent(points) : hungerPercent(points);
+    const fill = document.getElementById(isHealth ? "health-fill" : "hunger-fill");
+    const pctEl = document.getElementById(isHealth ? "health-pct" : "hunger-pct");
+    const ptsEl = document.getElementById(isHealth ? "health-points" : "hunger-points");
+    const meter = document.getElementById(isHealth ? "health-meter" : "hunger-meter");
+    if (fill) fill.style.transform = `scaleY(${Math.max(0, Math.min(1, points / max))})`;
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    if (ptsEl) ptsEl.textContent = `${points}/${max}`;
+    if (meter) {
+      meter.setAttribute("aria-valuenow", String(points));
+      meter.setAttribute("aria-valuetext", `${pct}% · ${points} / ${max}`);
+      // Full >50%, orange-yellow ≤50%, red ≤15%.
+      meter.classList.toggle("is-low", pct <= 50 && pct > 15);
+      meter.classList.toggle("is-critical", pct <= 15);
+    }
+  }
+
+  function renderHunger() {
+    renderVitalsMeter("hunger");
+    renderVitalsMeter("health");
   }
 
   function renderClock() {
@@ -771,12 +2073,14 @@ window.IslandFoundry = (() => {
     const timeEl = root.querySelector("#clock-time");
     const handEl = root.querySelector("#clock-hand");
     const label = formatWorldTime(state.worldMinutes);
+    const handDegrees = clockHandDegrees(state.worldMinutes);
     if (timeEl) timeEl.textContent = label;
     if (handEl) {
       // Keep hub-centered pivot from CSS; only set rotation angle.
-      handEl.style.transform = `translate(-50%, -100%) rotate(${clockHandDegrees(state.worldMinutes)}deg)`;
+      handEl.style.transform = `translate(-50%, -100%) rotate(${handDegrees}deg)`;
     }
-    updateSkyBackground();
+    updateSkyBackground(handDegrees);
+    renderHunger();
   }
 
   function grantHarvest(state, resourceId, amount, labelHint) {
@@ -814,6 +2118,7 @@ window.IslandFoundry = (() => {
 
   function harvestTile(state, tile) {
     if (!tile.node || tile.machine) return false;
+    if (!canActWithHealth(state)) return false;
     // Broken-down / depleted nodes give nothing until they respawn.
     if (tile.hp <= 0) {
       setToast(state, "Depleted — wait for it to refill");
@@ -835,20 +2140,35 @@ window.IslandFoundry = (() => {
     if (tile.hp > 0) {
       window.KeaghanSfx?.playHarvest?.(nodeType, false);
       grantHarvest(state, def.resource, 1, `${def.label}… ${tile.hp}/${tile.maxHp}`);
-      return true;
+      if (nodeType === "tree" && Math.random() < 0.18) {
+        addItem(state, "apple", 1);
+        window.KeaghanSfx?.playFoodPop?.();
+        setToast(state, `${state.toast} · +1 Apple`);
+      }
+    } else {
+      window.KeaghanSfx?.playHarvest?.(nodeType, true);
+      // Carrots are 1-hit pickups (1 each). Other nodes drop a small pile on break.
+      const amount = nodeType === "carrot" ? def.yield || 1 : 3;
+      grantHarvest(state, def.resource, amount);
+      if (nodeType === "tree" && Math.random() < 0.55) {
+        addItem(state, "apple", 1);
+        window.KeaghanSfx?.playFoodPop?.();
+        setToast(state, `${state.toast} · +1 Apple`);
+      }
+      // Stay depleted until 6:00 a.m. (blocked further if a machine sits here).
+      tile.hp = 0;
+      tile.respawn = null;
     }
 
-    window.KeaghanSfx?.playHarvest?.(nodeType, true);
-    grantHarvest(state, def.resource, 3);
-    // Stay depleted until 6:00 a.m. (blocked further if a machine sits here).
-    tile.hp = 0;
-    tile.respawn = null;
+    // After loot toast so a starve warning can replace it when needed.
+    applyHungerCost(state, hungerActionCost());
     return true;
   }
 
   function craft(state, recipeId, { fromStation = false } = {}) {
     const recipe = GameData.recipes.find((r) => r.id === recipeId);
     if (!recipe) return false;
+    if (!canActWithHealth(state)) return false;
     if (recipe.atStation && !fromStation) {
       setToast(state, "Open a Crafting Table to make that");
       return false;
@@ -869,17 +2189,28 @@ window.IslandFoundry = (() => {
     } else {
       setToast(state, `Crafted ${recipe.name}`);
     }
+    applyHungerCost(state, hungerActionCost());
     return true;
   }
 
-  const PLACEABLE = ["drill", "smelter", "generator", "powerPole", "cable", "craftingStation"];
+  const PLACEABLE = [
+    "drill",
+    "smelter",
+    "generator",
+    "powerPole",
+    "cable",
+    "craftingStation",
+    "base",
+  ];
   const MACHINE_LABELS = {
     drill: "Drill",
     smelter: "Smelter",
     generator: "Coal Generator",
     powerPole: "Power Pole",
-    cable: "Cable",
+    cable: "Power Line",
     craftingStation: "Crafting Table",
+    base: "Base",
+    deathCrate: "Death Crate",
   };
   const BUILD_STRUCTURES = [
     "craftingStation",
@@ -888,6 +2219,7 @@ window.IslandFoundry = (() => {
     "generator",
     "powerPole",
     "cable",
+    "base",
   ];
   const BUILD_HINTS = {
     craftingStation: "Grass or depleted nodes — costs 4 Planks (not on live trees/ores)",
@@ -895,9 +2227,317 @@ window.IslandFoundry = (() => {
     drill: "Place on a resource node (ore/coal/rock/tree) — then power it",
     generator: "Grass or depleted nodes — click the generator to load Coal",
     powerPole: "Grass or depleted nodes — costs Iron Ingot + Cable",
-    cable: "Grass or depleted nodes — costs 1 Cable (Copper Wire is not power cable)",
+    cable: "Grass or depleted nodes — costs 1 Cable; wires output buildings to input buildings",
+    base: "Clear 5×3 — 50 Planks. Upgrade inside (30 Stone, then 30 Iron). LMB to go inside",
     demolish: "Demolish locked (F) — click buildings to remove. F or a menu to exit.",
   };
+
+  function getBaseTierInfo(tier) {
+    const t = Math.max(1, Math.min(3, Math.floor(Number(tier) || 1)));
+    return GameData.baseTiers?.[t] || { name: "Base", icon: "🏠", label: "Wood" };
+  }
+
+  function normalizeBaseTiers(gameState) {
+    if (!gameState?.machines) return;
+    for (const m of gameState.machines) {
+      if (m?.type !== "base") continue;
+      const tier = Math.max(1, Math.min(3, Math.floor(Number(m.tier) || 1)));
+      m.tier = tier;
+    }
+  }
+
+  function getBaseRefund(base) {
+    const refund = { ...(getBuildCost("base") || {}) };
+    const tier = Math.max(1, Math.floor(Number(base?.tier) || 1));
+    for (let t = 2; t <= tier; t++) {
+      const cost = GameData.baseTiers?.[t]?.cost;
+      if (!cost) continue;
+      for (const [id, n] of Object.entries(cost)) {
+        refund[id] = (refund[id] || 0) + n;
+      }
+    }
+    return refund;
+  }
+
+  function findPlayerBase(gameState) {
+    if (!gameState) return null;
+    if (isInsideBase(gameState)) {
+      return gameState.machines?.find((m) => m?.type === "base") || null;
+    }
+    normalizePlayer(gameState);
+    return findBaseMachine(gameState, gameState.player.x, gameState.player.y);
+  }
+
+  function upgradePlayerBase(gameState) {
+    if (!gameState) return false;
+    const base = findPlayerBase(gameState);
+    if (!base) {
+      setToast(gameState, "Stand on your Base to upgrade it");
+      return false;
+    }
+    const tier = Math.max(1, Math.floor(Number(base.tier) || 1));
+    const next = tier + 1;
+    const nextInfo = GameData.baseTiers?.[next];
+    if (!nextInfo?.cost) {
+      setToast(gameState, "Base is fully upgraded (Iron)");
+      return false;
+    }
+    if (!canAfford(gameState, nextInfo.cost)) {
+      setToast(gameState, `Need ${formatCost(nextInfo.cost)} to upgrade`);
+      return false;
+    }
+    if (!canActWithHealth(gameState)) return false;
+    spend(gameState, nextInfo.cost);
+    base.tier = next;
+    if (isInsideBase(gameState)) rebuildInteriorMap(gameState);
+    applyHungerCost(gameState, hungerActionCost());
+    setToast(gameState, `Upgraded to ${nextInfo.name}!`);
+    return true;
+  }
+
+  function getStructureSize(type) {
+    const size = GameData.structureSize?.[type];
+    if (size && size.w >= 1 && size.h >= 1) {
+      return { w: Math.floor(size.w), h: Math.floor(size.h) };
+    }
+    return { w: 1, h: 1 };
+  }
+
+  /** Footprint cells for a structure (origin = top-left). */
+  function getStructureFootprint(type, originX, originY) {
+    const { w, h } = getStructureSize(type);
+    const cells = [];
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        cells.push({ x: originX + dx, y: originY + dy });
+      }
+    }
+    return cells;
+  }
+
+  function findBaseMachine(gameState, x, y) {
+    if (!gameState?.machines) return null;
+    return (
+      gameState.machines.find((m) => {
+        if (!m || m.type !== "base") return false;
+        const w = m.w || getStructureSize("base").w;
+        const h = m.h || getStructureSize("base").h;
+        return x >= m.x && x < m.x + w && y >= m.y && y < m.y + h;
+      }) || null
+    );
+  }
+
+  function closeBaseEnterPrompt() {
+    openBaseEnterPrompt = false;
+    hideModal("base-enter-modal");
+  }
+
+  /** Ask before going indoors — Enter / Stay outside. */
+  function promptBaseEnter() {
+    if (!state || !playActive || gamePaused) return;
+    if (isInsideBase(state)) return;
+    if (!isPlayerOnBase(state)) {
+      setToast(state, "Stand on your Base, then click it to go inside");
+      return;
+    }
+    clearBuildMode();
+    closeSmelterUi();
+    closeGeneratorUi();
+    closePlayerInvUi();
+    closeCraftTableUi();
+    closeRecipesUi();
+    closeBuildUi();
+
+    const base = findPlayerBase(state);
+    const name = getBaseTierInfo(base?.tier).name;
+    const title = document.getElementById("base-enter-title");
+    const hint = document.getElementById("base-enter-hint");
+    if (title) title.textContent = `Enter ${name}?`;
+    if (hint) {
+      hint.textContent =
+        "Go inside? 10×10 with rooms — doors on the east, upgrade room north, kitchen NW, living NE, storage SW, bedroom SE.";
+    }
+
+    openBaseEnterPrompt = true;
+    showModal("base-enter-modal");
+    renderHud();
+  }
+
+  function rebuildInteriorMap(gameState) {
+    if (!gameState) return;
+    const base = gameState.machines?.find((m) => m?.type === "base");
+    const tier = Math.max(1, Math.floor(Number(base?.tier) || 1));
+    const pos = gameState.insideBase ? { ...gameState.player } : null;
+    gameState.interiorTiles = makeInteriorWorld(tier);
+    if (pos && gameState.insideBase) {
+      gameState.player = pos;
+      normalizePlayer(gameState);
+      const here = getActiveTile(gameState, gameState.player.x, gameState.player.y);
+      if (!isInteriorWalkable(here)) gameState.player = interiorSpawnPos();
+    }
+  }
+
+  function enterBaseInterior() {
+    if (!state || !playActive) return;
+    if (isInsideBase(state)) return;
+    if (!isPlayerOnBase(state)) {
+      setToast(state, "Stand on your Base, then click it to go inside");
+      return;
+    }
+    closeBaseEnterPrompt();
+    clearBuildMode();
+    closeSmelterUi();
+    closeGeneratorUi();
+    closePlayerInvUi();
+    closeCraftTableUi();
+    closeRecipesUi();
+    closeBuildUi();
+
+    const base = findPlayerBase(state);
+    const tier = Math.max(1, Math.floor(Number(base?.tier) || 1));
+    state.outdoorPlayer = { x: state.player.x, y: state.player.y };
+    state.insideBase = true;
+    rebuildInteriorMap(state);
+    state.player = interiorSpawnPos();
+    setToast(state, `Inside the ${getBaseTierInfo(tier).name}`);
+    updateGoals(state);
+    saveState(state);
+    render();
+  }
+
+  function leaveBaseInterior(gameState, { silent = false, skipRender = false } = {}) {
+    if (!gameState || !isInsideBase(gameState)) return false;
+    const outdoor = gameState.outdoorPlayer || defaultPlayerPos();
+    gameState.insideBase = false;
+    gameState.interiorTiles = null;
+    gameState.outdoorPlayer = null;
+    gameState.player = {
+      x: Math.max(0, Math.min(COLS - 1, Math.floor(outdoor.x))),
+      y: Math.max(0, Math.min(ROWS - 1, Math.floor(outdoor.y))),
+    };
+    ensurePlayerOnWalkable(gameState);
+    if (!silent) setToast(gameState, "Back outside");
+    if (!skipRender && state === gameState) {
+      updateGoals(gameState);
+      saveState(gameState);
+      render();
+    }
+    return true;
+  }
+
+  function bindBaseEnterPrompt() {
+    const modal = document.getElementById("base-enter-modal");
+    if (!modal) return;
+    modal.addEventListener("click", (event) => {
+      const action = event.target.closest("[data-base-enter]")?.dataset.baseEnter;
+      if (!action) return;
+      if (action === "cancel") {
+        closeBaseEnterPrompt();
+        setToast(state, "Stayed outside");
+        renderHud();
+        return;
+      }
+      if (action === "enter") {
+        enterBaseInterior();
+      }
+    });
+  }
+
+  function closeSleepPrompt() {
+    openSleepPrompt = false;
+    hideModal("sleep-modal");
+  }
+
+  /** Night only — ask before skipping to 6:00 a.m. Daytime is blocked. */
+  function promptBedroomSleep() {
+    if (!state || !playActive || gamePaused) return;
+    if (!isInsideBase(state)) return;
+
+    if (!isNightTime(state.worldMinutes)) {
+      setToast(state, "Can't sleep now — it's daytime (6:00 a.m.–6:00 p.m.)");
+      renderHud();
+      return;
+    }
+
+    closeBaseEnterPrompt();
+    closeSmelterUi();
+    closeGeneratorUi();
+    closePlayerInvUi();
+    closeCraftTableUi();
+    closeRecipesUi();
+    closeBuildUi();
+
+    const title = document.getElementById("sleep-title");
+    const hint = document.getElementById("sleep-hint");
+    if (title) title.textContent = "Sleep?";
+    if (hint) {
+      hint.textContent = `It's ${formatWorldTime(state.worldMinutes)}. Sleep until 6:00 a.m.? Monsters leave at dawn.`;
+    }
+
+    openSleepPrompt = true;
+    showModal("sleep-modal");
+    renderHud();
+  }
+
+  function sleepInBedroom() {
+    if (!state || !playActive) return;
+    if (!isInsideBase(state)) return;
+    closeSleepPrompt();
+
+    if (!isNightTime(state.worldMinutes)) {
+      setToast(state, "Can't sleep now — it's daytime (6:00 a.m.–6:00 p.m.)");
+      renderHud();
+      return;
+    }
+
+    state.worldMinutes = DAWN_MINUTES;
+    clearNightMonsters(state, { toast: false });
+    regrowNodesAtDawn(state);
+    setToast(state, "You sleep until 6:00 a.m.");
+    updateGoals(state);
+    saveState(state);
+    render();
+  }
+
+  function bindSleepPrompt() {
+    const modal = document.getElementById("sleep-modal");
+    if (!modal) return;
+    modal.addEventListener("click", (event) => {
+      const action = event.target.closest("[data-sleep]")?.dataset.sleep;
+      if (!action) return;
+      if (action === "cancel") {
+        closeSleepPrompt();
+        setToast(state, "Stayed awake");
+        renderHud();
+        return;
+      }
+      if (action === "sleep") {
+        sleepInBedroom();
+      }
+    });
+  }
+
+  function canPlaceBase(gameState, originX, originY) {
+    const cells = getStructureFootprint("base", originX, originY);
+    for (const cell of cells) {
+      const tile = getTile(gameState, cell.x, cell.y);
+      if (!tile) {
+        return { ok: false, reason: "Base needs a clear 5×3 on the island", cells };
+      }
+      const spot = canPlaceOnTile("base", tile);
+      if (!spot.ok) {
+        return {
+          ok: false,
+          reason:
+            spot.reason === "Tile occupied"
+              ? "Base area is blocked"
+              : spot.reason,
+          cells,
+        };
+      }
+    }
+    return { ok: true, cells };
+  }
 
   function getBuildCost(type) {
     return GameData.buildCosts?.[type] || { [type]: 1 };
@@ -933,6 +2573,41 @@ window.IslandFoundry = (() => {
     return { ok: true };
   }
 
+  /** True when the avatar stands on any footprint cell of the structure. */
+  function playerBlocksBuild(gameState, type, originX, originY) {
+    if (!gameState || !PLACEABLE.includes(type)) return false;
+    normalizePlayer(gameState);
+    const cells =
+      type === "base"
+        ? getStructureFootprint("base", originX, originY)
+        : [{ x: originX, y: originY }];
+    return cells.some(
+      (c) => c.x === gameState.player.x && c.y === gameState.player.y
+    );
+  }
+
+  /**
+   * Build ghost under the cursor:
+   * blocked (red) · player in the way (orange-yellow) · missing materials (yellow) ·
+   * ready to place (light-blue).
+   */
+  function getBuildPreviewKind(gameState, type, tile) {
+    if (!gameState || !tile || !PLACEABLE.includes(type)) return null;
+    if (!isInPlayerReach(gameState, tile.x, tile.y)) return "blocked";
+    if (type === "base") {
+      if (!canPlaceBase(gameState, tile.x, tile.y).ok) return "blocked";
+    } else if (!canPlaceOnTile(type, tile).ok) {
+      return "blocked";
+    }
+    if (playerBlocksBuild(gameState, type, tile.x, tile.y)) return "player";
+    if (!canAfford(gameState, getBuildCost(type))) return "missing";
+    return "ready";
+  }
+
+  function buildStructureIcon(type) {
+    return GameData.getItem(type)?.icon || "□";
+  }
+
   function tileKey(x, y) {
     return `${x},${y}`;
   }
@@ -946,14 +2621,41 @@ window.IslandFoundry = (() => {
     return GameData.powerLinkRange?.[type] || 1;
   }
 
-  /** Two network buildings link if within the larger of their ranges. */
+  function isPowerConductor(type) {
+    return (GameData.powerConductors || ["cable", "powerPole"]).includes(type);
+  }
+
+  function isPowerOutput(type) {
+    return (GameData.powerOutputs || ["generator"]).includes(type);
+  }
+
+  function isPowerInput(type) {
+    return (GameData.powerInputs || ["drill", "smelter"]).includes(type);
+  }
+
+  /**
+   * Two network buildings link if in range and roles allow it.
+   * Crafting Tables never link. Power Lines/poles bridge any network buildings;
+   * otherwise only an output (generator) may touch an input (drill/smelter).
+   */
   function canPowerLink(a, b) {
+    if (!a || !b) return false;
+    if (a.type === "craftingStation" || b.type === "craftingStation") return false;
+    const network = new Set(GameData.powerNetwork || []);
+    if (!network.has(a.type) || !network.has(b.type)) return false;
+
     const dx = Math.abs(a.x - b.x);
     const dy = Math.abs(a.y - b.y);
     if (dx === 0 && dy === 0) return false;
     const range = Math.max(powerLinkRange(a.type), powerLinkRange(b.type));
-    if (range <= 1) return dx + dy === 1; // orthogonal adjacency only
-    return Math.max(dx, dy) <= range; // stations: king-move reach
+    const inRange = range <= 1 ? dx + dy === 1 : Math.max(dx, dy) <= range;
+    if (!inRange) return false;
+
+    if (isPowerConductor(a.type) || isPowerConductor(b.type)) return true;
+    return (
+      (isPowerOutput(a.type) && isPowerInput(b.type)) ||
+      (isPowerInput(a.type) && isPowerOutput(b.type))
+    );
   }
 
   const POWER_GRID_MAX = 20;
@@ -1368,11 +3070,58 @@ window.IslandFoundry = (() => {
 
   function placeMachine(state, tile, type) {
     if (!PLACEABLE.includes(type)) return false;
-    // Power lines require crafted Cable — Copper Wire is only a crafting ingredient.
+    if (!canActWithHealth(state)) return false;
+    // Power Lines spend crafted Cable — Copper Wire is only a crafting ingredient.
     if (type === "cable" && (state.inventory.cable || 0) < 1) {
-      setToast(state, "Need Cable — craft it from Copper Wire at a Crafting Table");
+      setToast(state, "Need Cable — craft 2 Copper Wire horizontally at a Crafting Table");
       return false;
     }
+    if (playerBlocksBuild(state, type, tile.x, tile.y)) {
+      setToast(state, "A player is in the way");
+      return false;
+    }
+
+    if (type === "base") {
+      const check = canPlaceBase(state, tile.x, tile.y);
+      if (!check.ok) {
+        setToast(state, check.reason);
+        return false;
+      }
+      const cost = getBuildCost(type);
+      if (!canAfford(state, cost)) {
+        setToast(state, `Need ${formatCost(cost)}`);
+        return false;
+      }
+      spend(state, cost);
+      const { w, h } = getStructureSize("base");
+      for (const cell of check.cells) {
+        const t = getTile(state, cell.x, cell.y);
+        if (!t) continue;
+        t.machine = "base";
+        if (!t.node) t.kind = "machine";
+      }
+      // Walls shove monsters out of the yard.
+      if (Array.isArray(state.monsters)) {
+        const blocked = new Set(check.cells.map((c) => tileKey(c.x, c.y)));
+        state.monsters = state.monsters.filter((m) => !blocked.has(tileKey(m.x, m.y)));
+      }
+      state.machines.push({
+        type: "base",
+        x: tile.x,
+        y: tile.y,
+        w,
+        h,
+        tier: 1,
+        timer: 0,
+        interval: 0,
+      });
+      setToast(state, "Wood Base raised — go inside to upgrade (Stone → Iron)");
+      applyHungerCost(state, hungerActionCost());
+      ensurePlayerOnWalkable(state);
+      ensureMonstersOnWalkable(state);
+      return true;
+    }
+
     const spot = canPlaceOnTile(type, tile);
     if (!spot.ok) {
       setToast(state, spot.reason);
@@ -1401,7 +3150,7 @@ window.IslandFoundry = (() => {
       setToast(
         state,
         resource
-          ? "Drill placed — connect it with cables, poles, or a station"
+          ? "Drill placed — connect it with Power Lines or poles (Crafting Tables have no power)"
           : "Drill placed (needs a resource node + power)"
       );
     } else if (type === "smelter") {
@@ -1427,7 +3176,7 @@ window.IslandFoundry = (() => {
         timer: 0,
         interval: 0,
       });
-      setToast(state, "Cable laid — cheap wiring between buildings");
+      setToast(state, "Power Line laid — connects output buildings to input buildings");
     } else if (type === "craftingStation") {
       state.machines.push({
         type: "craftingStation",
@@ -1440,12 +3189,45 @@ window.IslandFoundry = (() => {
       setToast(state, "Crafting Table placed — click it for the 3×3 workbench");
     }
 
+    applyHungerCost(state, hungerActionCost());
+    // Building on the player's tile is possible — slide them off if so.
+    ensurePlayerOnWalkable(state);
     // Stay in build mode until the player presses Q.
     return true;
   }
 
   function demolishMachine(state, tile) {
     if (!tile.machine) return false;
+    if (tile.machine === "deathCrate") {
+      return lootDeathCrate(state, tile);
+    }
+    if (!canActWithHealth(state)) return false;
+
+    if (tile.machine === "base") {
+      const base = findBaseMachine(state, tile.x, tile.y);
+      if (!base) {
+        tile.machine = null;
+        if (!tile.node) tile.kind = "grass";
+        else tile.kind = "node";
+        return false;
+      }
+      const cells = getStructureFootprint("base", base.x, base.y);
+      for (const cell of cells) {
+        const t = getTile(state, cell.x, cell.y);
+        if (!t || t.machine !== "base") continue;
+        t.machine = null;
+        if (!t.node) t.kind = "grass";
+        else t.kind = "node";
+      }
+      state.machines = state.machines.filter((m) => m !== base);
+      const refund = getBaseRefund(base);
+      for (const [id, n] of Object.entries(refund)) addItem(state, id, n);
+      const name = getBaseTierInfo(base.tier).name;
+      setToast(state, `${name} demolished — refunded ${formatCost(refund)}`);
+      applyHungerCost(state, hungerActionCost());
+      return true;
+    }
+
     const type = tile.machine;
     const machine = state.machines.find((m) => m.x === tile.x && m.y === tile.y);
     if (machine?.type === "smelter") returnSmelterContents(state, machine);
@@ -1473,6 +3255,7 @@ window.IslandFoundry = (() => {
         ? `${label} removed — materials refunded, node can regrow at 6:00 a.m.`
         : `${label} demolished — refunded ${formatCost(refund)}`
     );
+    applyHungerCost(state, hungerActionCost());
     return true;
   }
 
@@ -1578,7 +3361,12 @@ window.IslandFoundry = (() => {
   let openGenerator = null; // { x, y } of open generator UI
   let openPlayerInv = false;
   let openCraftTable = null; // { x, y } of open crafting table
+  let openRecipes = false;
+  let recipesSelectedId = null; // null = category grid; set = detail view
+  let recipesCategory = "everything"; // "everything" | "items" | "tools" | "food" | "buildings"
   let openBuildMenu = false;
+  let openBaseEnterPrompt = false;
+  let openSleepPrompt = false;
   let gamePaused = false;
   let advancementsSig = "";
   let playerCraftGrid = [null, null, null, null];
@@ -1586,6 +3374,7 @@ window.IslandFoundry = (() => {
   let smelterDrag = null; // { from, itemId, count, outIndex? }
   let generatorDrag = null; // { from, itemId, count }
   let playActive = false;
+  let buildHover = null; // { x, y } while aiming a placeable structure
 
   function findOpenSmelterMachine() {
     if (!state || !openSmelter) return null;
@@ -1881,11 +3670,18 @@ window.IslandFoundry = (() => {
   function clearBuildMode(toastMsg = null) {
     if (!state || !state.buildMode) return;
     state.buildMode = null;
+    buildHover = null;
+    clearBuildPreview();
     if (toastMsg) setToast(state, toastMsg);
   }
 
   function toggleDemolishMode() {
     if (!state || !playActive) return;
+    if (isInsideBase(state)) {
+      setToast(state, "Can't demolish while inside the Base");
+      renderHud();
+      return;
+    }
     closeSmelterUi();
     closeGeneratorUi();
     closePlayerInvUi();
@@ -2050,7 +3846,7 @@ window.IslandFoundry = (() => {
       } else if (!isGeneratorFueled(m)) {
         summary.textContent = "Needs fuel — load Coal to power the grid";
       } else if (!wired) {
-        summary.textContent = "Needs connection — run a cable or pole to a machine";
+        summary.textContent = "Needs connection — run a Power Line or pole to a machine";
       } else if (demand <= 0) {
         summary.textContent = "Online — wired, no power draw yet";
       } else {
@@ -2413,6 +4209,18 @@ window.IslandFoundry = (() => {
     });
   }
 
+  /** Craft cells hold 1 — refund any overflow into the bag. */
+  function clampCraftGridToSlotMax(grid) {
+    if (!grid || !state) return;
+    for (let i = 0; i < grid.length; i++) {
+      const stack = grid[i];
+      if (!stack || stack.missing || !(stack.count > CRAFT_SLOT_MAX)) continue;
+      const extra = stack.count - CRAFT_SLOT_MAX;
+      stack.count = CRAFT_SLOT_MAX;
+      addItem(state, stack.id, extra);
+    }
+  }
+
   function returnGridToInv(grid) {
     if (!grid) return;
     for (let i = 0; i < grid.length; i++) {
@@ -2481,6 +4289,7 @@ window.IslandFoundry = (() => {
     const bench = getActiveBench();
     const recipe = GameData.recipes.find((r) => r.id === recipeId);
     if (!bench || !recipe) return false;
+    if (!canActWithHealth(state)) return false;
     if (!bench.recipes.some((r) => r.id === recipe.id)) return false;
     if (gridHasMissing(bench.grid)) {
       setToast(state, "Missing materials (red slots)");
@@ -2517,6 +4326,7 @@ window.IslandFoundry = (() => {
     } else {
       setToast(state, `Crafted ${recipe.name}`);
     }
+    applyHungerCost(state, hungerActionCost());
   }
 
   function findCraftTableMachine() {
@@ -2534,6 +4344,7 @@ window.IslandFoundry = (() => {
   function ensureCraftTableShape(m) {
     if (!m || m.type !== "craftingStation") return m;
     m.craftGrid = normalizeCraftGrid(m.craftGrid, 9);
+    clampCraftGridToSlotMax(m.craftGrid);
     return m;
   }
 
@@ -2541,6 +4352,7 @@ window.IslandFoundry = (() => {
   function getActiveBench() {
     if (openPlayerInv) {
       playerCraftGrid = normalizeCraftGrid(playerCraftGrid, 4);
+      clampCraftGridToSlotMax(playerCraftGrid);
       return {
         mode: "player",
         grid: playerCraftGrid,
@@ -2624,11 +4436,16 @@ window.IslandFoundry = (() => {
     const dest = state.bag[bagIndex];
 
     if (dest && dest.id !== stack.id) {
-      // Swap whole stacks.
-      state.bag[bagIndex] = { id: stack.id, count: stack.count };
-      bench.grid[gridIndex] = { id: dest.id, count: dest.count };
+      // Swap one bag item into the craft cell (craft slots hold 1).
+      const craftId = stack.id;
+      const craftCount = Math.min(CRAFT_SLOT_MAX, stack.count);
+      const bagId = dest.id;
+      const bagLeft = dest.count - 1;
+      state.bag[bagIndex] = { id: craftId, count: craftCount };
+      bench.grid[gridIndex] = { id: bagId, count: CRAFT_SLOT_MAX };
       rebuildInventoryFromBag(state);
-      return stack.count;
+      if (bagLeft > 0) addItem(state, bagId, bagLeft);
+      return craftCount;
     }
 
     const moved = Math.min(amount === Infinity ? stack.count : amount, stack.count);
@@ -2646,6 +4463,7 @@ window.IslandFoundry = (() => {
   function takeActiveGridResult() {
     const bench = getActiveBench();
     if (!bench) return false;
+    if (!canActWithHealth(state)) return false;
     if (gridHasMissing(bench.grid)) {
       setToast(state, "Missing materials (red slots)");
       return false;
@@ -2690,9 +4508,10 @@ window.IslandFoundry = (() => {
     for (let i = 0; i < bench.size; i++) {
       const cell = normalizeLayoutCell(layout[i]);
       if (!cell) continue;
-      if ((state.inventory[cell.id] || 0) >= cell.count) {
-        removeItem(state, cell.id, cell.count);
-        bench.grid[i] = { id: cell.id, count: cell.count };
+      const need = CRAFT_SLOT_MAX;
+      if ((state.inventory[cell.id] || 0) >= need) {
+        removeItem(state, cell.id, need);
+        bench.grid[i] = { id: cell.id, count: need };
         placed += 1;
       } else {
         // Ghost placeholder — dark item with red border in the UI.
@@ -2758,12 +4577,13 @@ window.IslandFoundry = (() => {
     closeGeneratorUi();
     closeCraftTableUi();
     closeBuildUi();
+    closeRecipesUi();
     openPlayerInv = true;
     playerCraftGrid = normalizeCraftGrid(playerCraftGrid, 4);
     showModal("player-inv-modal");
     renderActiveBenchUi();
     renderHud();
-    setToast(state, "Inventory — 2×2 pocket craft (Tab to close)");
+    setToast(state, "Inventory — 2×2 pocket craft (Tab to close · E recipes)");
   }
 
   function togglePlayerInvUi() {
@@ -2799,6 +4619,7 @@ window.IslandFoundry = (() => {
     closeGeneratorUi();
     closePlayerInvUi();
     closeBuildUi();
+    closeRecipesUi();
     const exists = state.machines.some(
       (m) => m.type === "craftingStation" && m.x === x && m.y === y
     );
@@ -2812,7 +4633,188 @@ window.IslandFoundry = (() => {
     showModal("craft-table-modal");
     renderActiveBenchUi();
     renderHud();
-    setToast(state, "Crafting Table — 3×3 workbench");
+    setToast(state, "Crafting Table — 3×3 workbench · E recipes");
+  }
+
+  function clearActiveCraftGrid() {
+    const bench = getActiveBench();
+    if (!bench || !state) return false;
+    const had = (bench.grid || []).some((s) => s && !s.missing && s.count > 0);
+    returnGridToInv(bench.grid);
+    if (!had) {
+      setToast(state, "Craft grid is already empty");
+      return false;
+    }
+    setToast(state, "Erased craft grid — materials returned");
+    return true;
+  }
+
+  function closeRecipesUi() {
+    openRecipes = false;
+    recipesSelectedId = null;
+    recipesCategory = "everything";
+    hideModal("recipes-modal");
+  }
+
+  const GUIDE_ITEMS = [
+    "log",
+    "plank",
+    "stick",
+    "stone",
+    "coal",
+    "ironOre",
+    "copperOre",
+    "ironIngot",
+    "copperIngot",
+    "gear",
+    "copperWire",
+    "cable",
+  ];
+
+  const GUIDE_TOOLS = ["woodPick", "stonePick", "ironPick", "ironSword"];
+
+  const GUIDE_FOOD = ["apple", "carrot"];
+
+  const GUIDE_BUILDINGS = [
+    "craftingStation",
+    "smelter",
+    "generator",
+    "powerPole",
+    "cable",
+    "drill",
+    "base",
+  ];
+
+  const GUIDE_CATEGORIES = ["everything", "items", "tools", "food", "buildings"];
+
+  function guideIdsForCategory(category) {
+    const lists = {
+      items: GUIDE_ITEMS,
+      tools: GUIDE_TOOLS,
+      food: GUIDE_FOOD,
+      buildings: GUIDE_BUILDINGS,
+      everything: [...GUIDE_ITEMS, ...GUIDE_TOOLS, ...GUIDE_FOOD, ...GUIDE_BUILDINGS],
+    };
+    const list = lists[category] || GUIDE_ITEMS;
+    // Dedupe (e.g. Cable appears as item + building) while keeping order.
+    const seen = new Set();
+    return list.filter((id) => {
+      if (!GameData.getItemGuide(id) || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+
+  function guideCategoryLabel(category) {
+    if (category === "everything") return "Everything";
+    if (category === "tools") return "Tools";
+    if (category === "food") return "Food";
+    if (category === "buildings") return "Buildings";
+    return "Items";
+  }
+
+  function guideDisplayName(id, category) {
+    if ((category === "buildings" || category === "everything") && MACHINE_LABELS[id]) {
+      return MACHINE_LABELS[id];
+    }
+    return GameData.getItem(id)?.name || id;
+  }
+
+  function recipesBrowserHtml() {
+    // Detail view replaces the button grid entirely.
+    if (recipesSelectedId) {
+      const guide = GameData.getItemGuide(recipesSelectedId);
+      const selected = GameData.getItem(recipesSelectedId);
+      if (!guide || !selected) {
+        recipesSelectedId = null;
+      } else {
+        const title = guideDisplayName(recipesSelectedId, recipesCategory);
+        return `
+          <div class="recipes-layout recipes-layout--detail">
+            <button type="button" class="recipes-back" data-guide-back title="Back to list">
+              ← Return
+            </button>
+            <article class="recipes-detail" aria-live="polite">
+              <header class="recipes-detail__head">
+                <span class="recipes-detail__icon">${selected.icon}</span>
+                <h3>${title}</h3>
+              </header>
+              <div class="recipes-detail__block">
+                <h4>How to get / make</h4>
+                <p>${guide.how}</p>
+              </div>
+              <div class="recipes-detail__block">
+                <h4>Used for</h4>
+                <p>${guide.uses}</p>
+              </div>
+            </article>
+          </div>
+        `;
+      }
+    }
+
+    const ids = guideIdsForCategory(recipesCategory);
+    const tiles = ids
+      .map((id) => {
+        const item = GameData.getItem(id);
+        const name = guideDisplayName(id, recipesCategory);
+        return `<button type="button" class="recipes-tile" data-guide-item="${id}" title="${name}">
+          <span class="recipes-tile__icon">${item.icon}</span>
+          <span class="recipes-tile__name">${name}</span>
+        </button>`;
+      })
+      .join("");
+
+    const catButtons = GUIDE_CATEGORIES.map((cat) => {
+      const active = recipesCategory === cat ? " is-active" : "";
+      const label = guideCategoryLabel(cat);
+      return `<button type="button" class="recipes-cat${active}" data-guide-cat="${cat}" role="tab" aria-selected="${recipesCategory === cat}">
+            ${label}
+          </button>`;
+    }).join("");
+
+    return `
+      <div class="recipes-layout">
+        <div class="recipes-cats" role="tablist" aria-label="Guide categories">
+          ${catButtons}
+        </div>
+        <section class="recipes-section" aria-label="${guideCategoryLabel(recipesCategory)}">
+          <div class="recipes-tile-grid">${tiles}</div>
+        </section>
+      </div>
+    `;
+  }
+
+  function renderRecipesUi() {
+    const browser = document.getElementById("recipes-browser");
+    if (!browser || !state) return;
+    browser.innerHTML = recipesBrowserHtml();
+  }
+
+  function openRecipesUi() {
+    if (!state || !playActive) return;
+    clearBuildMode();
+    closeSmelterUi();
+    closeGeneratorUi();
+    closeBuildUi();
+    // Keep inventory / crafting table open underneath when already using them.
+    openRecipes = true;
+    recipesSelectedId = null;
+    recipesCategory = "everything";
+    showModal("recipes-modal");
+    renderRecipesUi();
+    renderHud();
+    setToast(state, "Guide — Everything, or pick a category (E to close)");
+  }
+
+  function toggleRecipesUi() {
+    if (!state || !playActive) return;
+    if (openRecipes) {
+      closeRecipesUi();
+      renderHud();
+      return;
+    }
+    openRecipesUi();
   }
 
   function onPlayKeyDown(event) {
@@ -2824,6 +4826,31 @@ window.IslandFoundry = (() => {
       event.preventDefault();
       if (gamePaused) {
         resumeGame();
+        return;
+      }
+      if (openBaseEnterPrompt) {
+        closeBaseEnterPrompt();
+        renderHud();
+        return;
+      }
+      if (openSleepPrompt) {
+        closeSleepPrompt();
+        renderHud();
+        return;
+      }
+      if (state && isInsideBase(state)) {
+        leaveBaseInterior(state);
+        return;
+      }
+      if (openRecipes) {
+        // From detail → back to category grid first.
+        if (recipesSelectedId) {
+          recipesSelectedId = null;
+          renderRecipesUi();
+          return;
+        }
+        closeRecipesUi();
+        renderHud();
         return;
       }
       if (openPlayerInv) {
@@ -2873,6 +4900,7 @@ window.IslandFoundry = (() => {
         closeGeneratorUi();
         closePlayerInvUi();
         closeCraftTableUi();
+        closeRecipesUi();
         selectBuildMode(BUILD_STRUCTURES[index]);
         return;
       }
@@ -2883,6 +4911,11 @@ window.IslandFoundry = (() => {
       togglePlayerInvUi();
       return;
     }
+    if (event.key === "e" || event.key === "E") {
+      event.preventDefault();
+      toggleRecipesUi();
+      return;
+    }
     if (event.key === "q" || event.key === "Q") {
       event.preventDefault();
       toggleBuildUi();
@@ -2891,6 +4924,15 @@ window.IslandFoundry = (() => {
     if (event.key === "f" || event.key === "F") {
       event.preventDefault();
       toggleDemolishMode();
+      return;
+    }
+
+    const move = event.key.length === 1 ? event.key.toLowerCase() : "";
+    if (move === "w" || move === "a" || move === "s" || move === "d") {
+      event.preventDefault();
+      const step =
+        move === "w" ? [0, -1] : move === "s" ? [0, 1] : move === "a" ? [-1, 0] : [1, 0];
+      tryMovePlayer(step[0], step[1]);
     }
   }
 
@@ -2906,6 +4948,7 @@ window.IslandFoundry = (() => {
     closePlayerInvUi();
     closeCraftTableUi();
     closeBuildUi();
+    closeBaseEnterPrompt();
     gamePaused = true;
     window.KeaghanSfx?.pauseMusic?.();
     showModal("pause-modal");
@@ -2958,6 +5001,11 @@ window.IslandFoundry = (() => {
 
   function toggleBuildUi() {
     if (!state || !playActive) return;
+    if (isInsideBase(state)) {
+      setToast(state, "Can't build while inside the Base — go outside first");
+      renderHud();
+      return;
+    }
 
     // Q while demolishing: exit demolish and open the build menu.
     if (state.buildMode === "demolish") {
@@ -2994,6 +5042,11 @@ window.IslandFoundry = (() => {
 
   function selectBuildMode(mode) {
     if (!state) return false;
+    if (isInsideBase(state)) {
+      setToast(state, "Can't build while inside the Base — go outside first");
+      renderHud();
+      return false;
+    }
     if (mode === "demolish") {
       state.buildMode = "demolish";
     } else if (PLACEABLE.includes(mode)) {
@@ -3017,6 +5070,7 @@ window.IslandFoundry = (() => {
     }
     setToast(state, msg);
     renderHud();
+    refreshBuildPreview();
     saveState(state);
     return true;
   }
@@ -3029,6 +5083,7 @@ window.IslandFoundry = (() => {
 
     grid.innerHTML = BUILD_STRUCTURES.map((id, index) => {
       const item = GameData.getItem(id);
+      const label = MACHINE_LABELS[id] || item.name;
       const cost = getBuildCost(id);
       const afford = canBuildStructure(state, id);
       const selected = state.buildMode === id;
@@ -3037,11 +5092,11 @@ window.IslandFoundry = (() => {
         .map(([cid, n]) => `${n}${GameData.getItem(cid).icon}`)
         .join(" ");
       const hotkey = String(index + 1);
-      return `<button type="button" class="smelter-slot build-slot${afford ? "" : " is-empty"}${selected ? " is-selected" : ""}" data-build-pick="${id}" title="${hotkey}: ${item.name}: ${costText}">
+      return `<button type="button" class="smelter-slot build-slot${afford ? "" : " is-empty"}${selected ? " is-selected" : ""}" data-build-pick="${id}" title="${hotkey}: ${label}: ${costText}">
         <span class="build-slot__hotkey">${hotkey}</span>
         <span class="smelter-slot__icon">${item.icon}</span>
         <span class="build-slot__cost">${costShort}</span>
-        <span class="build-slot__name">${item.name}</span>
+        <span class="build-slot__name">${label}</span>
       </button>`;
     }).join("");
 
@@ -3126,7 +5181,12 @@ window.IslandFoundry = (() => {
           if (!stack) {
             return `<button type="button" class="smelter-slot is-empty" data-bag-slot="${index}">${slotHtml(null, 0)}</button>`;
           }
-          return `<button type="button" class="smelter-slot" data-bag-slot="${index}" draggable="true">${slotHtml(stack.id, stack.count)}</button>`;
+          const foodHint =
+            isFoodItem(stack.id) && !canAcceptFood(state)
+              ? " · Full (90%+) — drag to Eat won't work"
+              : "";
+          const name = GameData.getItem(stack.id).name;
+          return `<button type="button" class="smelter-slot" data-bag-slot="${index}" draggable="true" title="${name}${foodHint}">${slotHtml(stack.id, stack.count)}</button>`;
         })
         .join("");
     }
@@ -3265,18 +5325,26 @@ window.IslandFoundry = (() => {
     modal.addEventListener("dragover", (event) => {
       if (!craftDrag) return;
       const drop = event.target.closest(
-        "[data-craft-grid], [data-bag-slot], [data-inv-trash], .craft-station-col--inv, .craft-grid"
+        "[data-craft-grid], [data-bag-slot], [data-inv-trash], [data-inv-eat], .craft-station-col--inv, .craft-grid"
       );
       if (!drop) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = "move";
       modal
-        .querySelectorAll(".smelter-slot.is-drop-hover, .inv-trash.is-drop-hover")
-        .forEach((el) => el.classList.remove("is-drop-hover"));
+        .querySelectorAll(
+          ".smelter-slot.is-drop-hover, .inv-trash.is-drop-hover, .inv-eat.is-drop-hover, .inv-eat.is-reject"
+        )
+        .forEach((el) => el.classList.remove("is-drop-hover", "is-reject"));
       const trash = event.target.closest("[data-inv-trash]");
+      const eat = event.target.closest("[data-inv-eat]");
       const hover = event.target.closest(".smelter-slot");
       if (trash) trash.classList.add("is-drop-hover");
-      else if (hover) hover.classList.add("is-drop-hover");
+      else if (eat) {
+        eat.classList.add("is-drop-hover");
+        if (!isFoodItem(craftDrag.itemId) || !canAcceptFood(state)) {
+          eat.classList.add("is-reject");
+        }
+      } else if (hover) hover.classList.add("is-drop-hover");
     });
 
     modal.addEventListener("drop", (event) => {
@@ -3287,15 +5355,20 @@ window.IslandFoundry = (() => {
       }
       ensureBag(state);
       const trash = event.target.closest("[data-inv-trash]");
+      const eat = event.target.closest("[data-inv-eat]");
       const gridSlot = event.target.closest("[data-craft-grid]");
       const bagSlot = event.target.closest("[data-bag-slot]");
       const toInvArea = event.target.closest(".craft-station-col--inv");
 
       let changed = false;
-      if (trash) {
+      if (eat) {
+        changed = eatFromCraftDrag(craftDrag);
+        if (changed) renderHunger();
+      } else if (trash) {
         changed = destroyDraggedStack(craftDrag);
       } else if (gridSlot && craftDrag.from === "bag") {
-        changed = pushToActiveGridFromBag(craftDrag.bagIndex, craftDrag.count) > 0;
+        changed =
+          placeOneFromBagIntoCraftSlot(craftDrag.bagIndex, Number(gridSlot.dataset.craftGrid)) > 0;
       } else if (bagSlot && craftDrag.from === "bag") {
         changed = swapOrMergeBagSlots(craftDrag.bagIndex, Number(bagSlot.dataset.bagSlot));
       } else if (bagSlot && craftDrag.from === "grid") {
@@ -3324,16 +5397,16 @@ window.IslandFoundry = (() => {
       craftDrag = null;
       modal.classList.remove("is-dragging");
       modal
-        .querySelectorAll(".is-drag-source, .is-drop-hover")
-        .forEach((el) => el.classList.remove("is-drag-source", "is-drop-hover"));
+        .querySelectorAll(".is-drag-source, .is-drop-hover, .is-reject")
+        .forEach((el) => el.classList.remove("is-drag-source", "is-drop-hover", "is-reject"));
     });
 
     modal.addEventListener("dragend", () => {
       craftDrag = null;
       modal.classList.remove("is-dragging");
       modal
-        .querySelectorAll(".is-drag-source, .is-drop-hover")
-        .forEach((el) => el.classList.remove("is-drag-source", "is-drop-hover"));
+        .querySelectorAll(".is-drag-source, .is-drop-hover, .is-reject")
+        .forEach((el) => el.classList.remove("is-drag-source", "is-drop-hover", "is-reject"));
     });
   }
 
@@ -3343,6 +5416,41 @@ window.IslandFoundry = (() => {
 
   function bindCraftTableUi() {
     bindBenchModal("craft-table-modal", "data-craft-table-close", () => Boolean(openCraftTable));
+  }
+
+  function bindRecipesUi() {
+    const modal = document.getElementById("recipes-modal");
+    if (!modal) return;
+
+    modal.addEventListener("click", (event) => {
+      if (event.target.closest("[data-recipes-close]")) {
+        closeRecipesUi();
+        renderHud();
+        return;
+      }
+      if (!openRecipes) return;
+
+      if (event.target.closest("[data-guide-back]")) {
+        recipesSelectedId = null;
+        renderRecipesUi();
+        return;
+      }
+
+      const catBtn = event.target.closest("[data-guide-cat]");
+      if (catBtn) {
+        const next = catBtn.dataset.guideCat;
+        recipesCategory = GUIDE_CATEGORIES.includes(next) ? next : "everything";
+        recipesSelectedId = null;
+        renderRecipesUi();
+        return;
+      }
+
+      const guideBtn = event.target.closest("[data-guide-item]");
+      if (guideBtn) {
+        recipesSelectedId = guideBtn.dataset.guideItem;
+        renderRecipesUi();
+      }
+    });
   }
 
   function moveInvToSmelter(itemId) {
@@ -3492,50 +5600,86 @@ window.IslandFoundry = (() => {
   }
 
   function tileClass(tile) {
+    if (state && isInsideBase(state) && tile?.kind) {
+      const tier = Math.max(1, Math.floor(Number(tile.tier) || 1));
+      let cls = `tile tile--interior tile--interior-${tile.kind} tile--interior-t${tier}`;
+      if (tile.room) cls += ` tile--room-${tile.room}`;
+      if (!isInPlayerReach(state, tile.x, tile.y)) cls += " tile--out-of-reach";
+      return cls;
+    }
     const key = tileKey(tile.x, tile.y);
     const onGrid = poweredTilesCache.has(key);
+    let cls = "tile";
 
     if (tile.machine === "generator") {
       const gen = state.machines.find(
         (machine) => machine.type === "generator" && machine.x === tile.x && machine.y === tile.y
       );
-      return `tile tile--generator${isGeneratorOnline(gen) ? " is-powered" : " is-unpowered"}`;
+      cls = `tile tile--generator${isGeneratorOnline(gen) ? " is-powered" : " is-unpowered"}`;
+    } else if (tile.machine === "powerPole") {
+      cls = `tile tile--pole${onGrid ? " is-powered" : " is-unpowered"}`;
+    } else if (tile.machine === "cable") {
+      cls = `tile tile--cable${onGrid ? " is-powered" : " is-unpowered"}`;
+    } else if (tile.machine === "craftingStation") {
+      cls = "tile tile--craft-station";
+    } else if (tile.machine === "drill") {
+      cls = `tile tile--drill${onGrid ? " is-powered" : " is-unpowered"}`;
+    } else if (tile.machine === "smelter") {
+      cls = `tile tile--smelter${isSmelterLit(tile) ? " is-lit" : " is-cold"}`;
+    } else if (tile.machine === "deathCrate") {
+      cls = "tile tile--death-crate";
+    } else if (tile.machine === "base") {
+      const base = state ? findBaseMachine(state, tile.x, tile.y) : null;
+      const tier = Math.max(1, Math.floor(Number(base?.tier) || 1));
+      cls = `tile tile--base tile--base-t${tier}`;
+    } else if (!tile.node) {
+      cls = "tile tile--grass";
+    } else if (tile.hp <= 0) {
+      cls = `tile tile--${tile.node} tile--depleted`;
+    } else {
+      cls = `tile tile--${tile.node}`;
     }
-    if (tile.machine === "powerPole") {
-      return `tile tile--pole${onGrid ? " is-powered" : " is-unpowered"}`;
+
+    if (state && !isInPlayerReach(state, tile.x, tile.y)) {
+      cls += " tile--out-of-reach";
     }
-    if (tile.machine === "cable") {
-      return `tile tile--cable${onGrid ? " is-powered" : " is-unpowered"}`;
-    }
-    if (tile.machine === "craftingStation") {
-      return "tile tile--craft-station";
-    }
-    if (tile.machine === "drill") {
-      return `tile tile--drill${onGrid ? " is-powered" : " is-unpowered"}`;
-    }
-    if (tile.machine === "smelter") {
-      return `tile tile--smelter${isSmelterLit(tile) ? " is-lit" : " is-cold"}`;
-    }
-    if (!tile.node) return "tile tile--grass";
-    if (tile.hp <= 0) return `tile tile--${tile.node} tile--depleted`;
-    return `tile tile--${tile.node}`;
+    return cls;
   }
 
   function tileLabel(tile) {
+    if (state && isInsideBase(state) && tile?.kind) {
+      if (tile.icon) return tile.icon;
+      if (tile.kind === "exit") return "🚪";
+      if (tile.kind === "upgrade") return "⬆";
+      if (tile.kind === "wall") return "";
+      return "";
+    }
     if (tile.machine === "drill") return "🔩";
     if (tile.machine === "smelter") return "🔥";
     if (tile.machine === "generator") return "⚡";
     if (tile.machine === "powerPole") return "🗼";
     if (tile.machine === "cable") return "━";
     if (tile.machine === "craftingStation") return "🪚";
+    if (tile.machine === "base") {
+      const base = state ? findBaseMachine(state, tile.x, tile.y) : null;
+      return getBaseTierInfo(base?.tier).icon || "🏠";
+    }
+    if (tile.machine === "deathCrate") return "📦";
     if (!tile.node) return "";
     if (tile.hp <= 0) return "·";
-    const map = { tree: "🌳", rock: "🪨", coal: "⬛", iron: "🟠", copper: "🟤" };
+    const map = {
+      tree: "🌳",
+      rock: "🪨",
+      coal: "⬛",
+      iron: "🟠",
+      copper: "🟤",
+      carrot: "🥕",
+    };
     return map[tile.node] || "?";
   }
 
   function refreshTilePowerStyles() {
-    if (!root) return;
+    if (!root || !state || isInsideBase(state)) return;
     const grid = root.querySelector("#world-grid");
     if (!grid) return;
     for (const btn of grid.querySelectorAll(".tile")) {
@@ -3544,23 +5688,198 @@ window.IslandFoundry = (() => {
       const tile = state.tiles[y * COLS + x];
       if (!tile) continue;
       const next = tileClass(tile);
-      // Only touch className when it changes — rewriting every frame restarts CSS animations.
-      if (btn.className !== next) btn.className = next;
+      // Keep overlay classes — rewriting className would strip ghost / player markers.
+      const keep = [
+        "is-build-preview",
+        "is-build-blocked",
+        "is-build-player",
+        "is-build-missing",
+        "is-build-ready",
+        "tile--player",
+        "tile--monster",
+      ].filter((c) => btn.classList.contains(c));
+      const base = btn.className
+        .split(/\s+/)
+        .filter(
+          (c) => c && !c.startsWith("is-build-") && c !== "tile--player" && c !== "tile--monster"
+        )
+        .join(" ");
+      if (base === next) continue;
+      btn.className = next;
+      for (const c of keep) btn.classList.add(c);
     }
+  }
+
+  function isPlaceBuildMode() {
+    if (state && isInsideBase(state)) return false;
+    return Boolean(state?.buildMode && PLACEABLE.includes(state.buildMode));
+  }
+
+  function clearBuildPreview() {
+    if (!root) return;
+    const grid = root.querySelector("#world-grid");
+    if (!grid) return;
+    grid.classList.toggle("is-building", isPlaceBuildMode());
+    for (const el of grid.querySelectorAll(".is-build-preview")) {
+      el.classList.remove(
+        "is-build-preview",
+        "is-build-blocked",
+        "is-build-player",
+        "is-build-missing",
+        "is-build-ready"
+      );
+      el.querySelector(".tile__ghost")?.remove();
+    }
+  }
+
+  function applyBuildPreview(x, y) {
+    clearBuildPreview();
+    if (!isPlaceBuildMode()) {
+      buildHover = null;
+      return;
+    }
+    const tile = getTile(state, x, y);
+    if (!tile) {
+      buildHover = null;
+      return;
+    }
+    const mode = state.buildMode;
+    const kind = getBuildPreviewKind(state, mode, tile);
+    if (!kind) {
+      buildHover = null;
+      return;
+    }
+    buildHover = { x, y };
+    const grid = root.querySelector("#world-grid");
+    if (!grid) return;
+
+    const cells =
+      mode === "base" ? getStructureFootprint("base", x, y) : [{ x, y }];
+    const icon = buildStructureIcon(mode);
+    const label = MACHINE_LABELS[mode] || mode;
+    let reason = "";
+    if (kind === "blocked") {
+      if (!isInPlayerReach(state, x, y)) reason = "too far (move within 3×3)";
+      else if (mode === "base") reason = canPlaceBase(state, x, y).reason;
+      else reason = canPlaceOnTile(mode, tile).reason;
+    } else if (kind === "player") {
+      reason = "a player is in the way";
+    } else if (kind === "missing") {
+      reason = `need ${formatCost(getBuildCost(mode))}`;
+    } else {
+      reason =
+        mode === "base"
+          ? `click top-left to place 5×3 (${formatCost(getBuildCost(mode))})`
+          : `click to place (${formatCost(getBuildCost(mode))})`;
+    }
+
+    for (const cell of cells) {
+      const btn = grid.querySelector(`.tile[data-x="${cell.x}"][data-y="${cell.y}"]`);
+      if (!btn) continue;
+      btn.classList.add("is-build-preview", `is-build-${kind}`);
+      const ghost = document.createElement("span");
+      ghost.className = "tile__ghost";
+      ghost.setAttribute("aria-hidden", "true");
+      ghost.textContent = icon;
+      btn.appendChild(ghost);
+      btn.title = `${label} — ${reason}`;
+    }
+  }
+
+  function refreshBuildPreview() {
+    if (!isPlaceBuildMode()) {
+      buildHover = null;
+      clearBuildPreview();
+      return;
+    }
+    if (buildHover) applyBuildPreview(buildHover.x, buildHover.y);
+    else clearBuildPreview();
+  }
+
+  function onWorldPointerMove(event) {
+    if (gamePaused || !isPlaceBuildMode()) {
+      if (buildHover) {
+        buildHover = null;
+        clearBuildPreview();
+      }
+      return;
+    }
+    const btn = event.target.closest(".tile");
+    if (!btn) {
+      if (buildHover) {
+        buildHover = null;
+        clearBuildPreview();
+      }
+      return;
+    }
+    const x = Number(btn.dataset.x);
+    const y = Number(btn.dataset.y);
+    if (buildHover && buildHover.x === x && buildHover.y === y) return;
+    applyBuildPreview(x, y);
+  }
+
+  function onWorldPointerLeave() {
+    if (!buildHover) return;
+    buildHover = null;
+    clearBuildPreview();
   }
 
   function renderWorld() {
     const grid = root.querySelector("#world-grid");
-    grid.style.setProperty("--cols", COLS);
+    const inside = isInsideBase(state);
+    const { cols } = activeMapSize(state);
+    const tiles = inside ? state.interiorTiles || [] : state.tiles;
+    grid.style.setProperty("--cols", cols);
+    grid.classList.toggle("is-inside-base", inside);
+    grid.setAttribute("aria-label", inside ? "Inside the Base" : "Resource island");
     grid.innerHTML = "";
-    for (const tile of state.tiles) {
+    normalizePlayer(state);
+    const px = state.player.x;
+    const py = state.player.y;
+    for (const tile of tiles) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = tileClass(tile);
       btn.dataset.x = tile.x;
       btn.dataset.y = tile.y;
       if (tile.machine) btn.dataset.machine = tile.machine;
+      if (tile.feature) btn.dataset.feature = tile.feature;
       btn.innerHTML = `<span class="tile__icon">${tileLabel(tile)}</span>`;
+      if (tile.x === px && tile.y === py) {
+        btn.classList.add("tile--player");
+        btn.insertAdjacentHTML(
+          "beforeend",
+          `<span class="tile__player" title="You" aria-label="You">🧑‍🔧</span>`
+        );
+      }
+      const monster = inside ? null : monsterAt(state, tile.x, tile.y);
+      if (monster) {
+        btn.classList.add("tile--monster");
+        const mLabel = GameData.monsters?.label || "Night Monster";
+        const mIcon = GameData.monsters?.icon || "🧟";
+        btn.insertAdjacentHTML(
+          "beforeend",
+          `<span class="tile__monster" title="${mLabel}" aria-label="${mLabel}">${mIcon}</span>`
+        );
+      }
+      if (inside) {
+        if (tile.kind === "exit") btn.title = "Front door — click to go outside";
+        else if (tile.kind === "upgrade") {
+          const base = findPlayerBase(state);
+          const tier = Math.max(1, Math.floor(Number(base?.tier) || 1));
+          const next = GameData.baseTiers?.[tier + 1];
+          btn.title = next?.cost
+            ? `Upgrade Room — bench (${formatCost(next.cost)})`
+            : "Upgrade Room — fully upgraded";
+        } else if (tile.kind === "wall") btn.title = "Wall";
+        else if (tile.room === "bedroom") btn.title = "Bedroom — click to sleep";
+        else btn.title = tile.label || INTERIOR_ROOM_LABELS[tile.room] || "Floor";
+        if (tile.x === px && tile.y === py) {
+          btn.title = (btn.title ? `${btn.title} · ` : "") + "You (WASD to move)";
+        }
+        grid.appendChild(btn);
+        continue;
+      }
       if (tile.node && tile.hp > 0 && !tile.machine) {
         const def = GameData.nodeTypes[tile.node];
         const minTool = def.minTool || "hand";
@@ -3595,9 +5914,24 @@ window.IslandFoundry = (() => {
             ? `Power Pole (live)${blocking}`
             : `Power Pole (no power)${blocking}`;
         } else if (tile.machine === "cable") {
-          btn.title = powered ? `Cable (live)${blocking}` : `Cable (no power)${blocking}`;
+          btn.title = powered ? `Power Line (live)${blocking}` : `Power Line (no power)${blocking}`;
         } else if (tile.machine === "craftingStation") {
           btn.title = `Crafting Table — click for 3×3 workbench${blocking}`;
+        } else if (tile.machine === "base") {
+          const onBase = isPlayerOnBase(state);
+          const base = findBaseMachine(state, tile.x, tile.y);
+          const name = getBaseTierInfo(base?.tier).name;
+          btn.title = onBase
+            ? `${name} — click to go inside${blocking}`
+            : `${name} — stand on it, then click to go inside${blocking}`;
+        } else if (tile.machine === "deathCrate") {
+          const crate = state.machines.find(
+            (machine) => machine.type === "deathCrate" && machine.x === tile.x && machine.y === tile.y
+          );
+          const n = Array.isArray(crate?.loot)
+            ? crate.loot.reduce((sum, s) => sum + (s?.count || 0), 0)
+            : 0;
+          btn.title = `Death Crate — click to recover items (${n})${blocking}`;
         } else if (tile.machine === "smelter") {
           btn.title = isSmelterLit(tile)
             ? `Smelter (lit) — click to open${blocking}`
@@ -3615,8 +5949,24 @@ window.IslandFoundry = (() => {
       } else {
         btn.title = "Empty ground";
       }
+      if (monster) {
+        const mLabel = GameData.monsters?.label || "Night Monster";
+        const maxHp = monsterMaxHp();
+        const hp = Number.isFinite(monster.hp) ? monster.hp : maxHp;
+        const swordReady =
+          (state.activeTool || "hand") === (GameData.monsters?.swordTool || "ironSword");
+        btn.title = !isInPlayerReach(state, tile.x, tile.y)
+          ? `${mLabel} (${hp}/${maxHp}) — too far`
+          : swordReady
+            ? `${mLabel} (${hp}/${maxHp}) — sword one-shot`
+            : `${mLabel} (${hp}/${maxHp}) — fist 1 dmg / sword one-shot`;
+      }
+      if (tile.x === px && tile.y === py) {
+        btn.title = (btn.title ? `${btn.title} · ` : "") + "You (WASD to move)";
+      }
       grid.appendChild(btn);
     }
+    refreshBuildPreview();
   }
 
   function renderInventory() {
@@ -3667,7 +6017,10 @@ window.IslandFoundry = (() => {
     if (toolEl) toolEl.textContent = toolName;
     if (buildEl) {
       if (gamePaused) buildEl.textContent = "Paused (Esc)";
-      else if (!state.buildMode) buildEl.textContent = "Build: off (Q) · Demolish: F";
+      else if (isInsideBase(state)) {
+        const base = findPlayerBase(state);
+        buildEl.textContent = `Inside ${getBaseTierInfo(base?.tier).name} · 🚪 leave · ⬆ upgrade`;
+      } else if (!state.buildMode) buildEl.textContent = "Build: off (Q) · Demolish: F";
       else if (state.buildMode === "demolish") buildEl.textContent = "Demolish: ON (F to exit)";
       else buildEl.textContent = `Build: ${MACHINE_LABELS[state.buildMode] || state.buildMode}`;
     }
@@ -3699,7 +6052,63 @@ window.IslandFoundry = (() => {
     if (!btn) return;
     const x = Number(btn.dataset.x);
     const y = Number(btn.dataset.y);
+
+    if (isInsideBase(state)) {
+      const tile = getActiveTile(state, x, y);
+      if (!tile) return;
+      if (!isInPlayerReach(state, x, y)) {
+        toastOutOfReach(state);
+        renderHud();
+        return;
+      }
+      if (tile.feature === "exit" || tile.kind === "exit") {
+        leaveBaseInterior(state);
+        return;
+      }
+      if (tile.feature === "upgrade" || tile.kind === "upgrade") {
+        if (upgradePlayerBase(state)) {
+          updateGoals(state);
+          saveState(state);
+          render();
+        } else {
+          renderHud();
+        }
+        return;
+      }
+      if (tile.room === "bedroom") {
+        promptBedroomSleep();
+        return;
+      }
+      if (tile.kind === "wall") {
+        setToast(state, "That's a wall");
+        renderHud();
+      }
+      return;
+    }
+
     const tile = state.tiles[y * COLS + x];
+    rememberActionTile(state, x, y);
+
+    // Harvest / open / build / demolish only inside the player's 3×3.
+    if (!isInPlayerReach(state, x, y)) {
+      toastOutOfReach(state);
+      renderHud();
+      return;
+    }
+
+    // Fight night monsters before other tile actions (not while placing/demolishing).
+    if (!state.buildMode && hitMonsterAt(state, x, y)) {
+      updateGoals(state);
+      saveState(state);
+      render();
+      return;
+    }
+
+    // Standing on the Base + LMB → ask whether to go inside.
+    if (!state.buildMode && tile.machine === "base" && isPlayerOnBase(state)) {
+      promptBaseEnter();
+      return;
+    }
 
     // Build / demolish mode takes priority; only Q clears build mode.
     if (state.buildMode === "demolish") {
@@ -3734,6 +6143,14 @@ window.IslandFoundry = (() => {
       return;
     }
 
+    if (tile.machine === "deathCrate") {
+      lootDeathCrate(state, tile);
+      updateGoals(state);
+      saveState(state);
+      render();
+      return;
+    }
+
     harvestTile(state, tile);
     updateGoals(state);
     saveState(state);
@@ -3753,6 +6170,9 @@ window.IslandFoundry = (() => {
   function tickWorldClock() {
     if (!state || gamePaused) return;
     advanceWorldTime(state, 5);
+    // Monsters move on the clock — refresh the island so their chase is visible.
+    renderWorld();
+    renderHud();
     renderClock();
     if (openSmelter) renderSmelterUi();
     if (openGenerator) renderGeneratorUi();
@@ -3797,14 +6217,20 @@ window.IslandFoundry = (() => {
     if (!state.activeTool) state.activeTool = bestTool(state);
 
     if (!bound) {
-      root.querySelector("#world-grid").addEventListener("click", onWorldClick);
+      const worldGrid = root.querySelector("#world-grid");
+      worldGrid.addEventListener("click", onWorldClick);
+      worldGrid.addEventListener("pointermove", onWorldPointerMove);
+      worldGrid.addEventListener("pointerleave", onWorldPointerLeave);
       root.addEventListener("click", onPanelClick);
       document.addEventListener("keydown", onPlayKeyDown);
       bindSmelterUi();
       bindGeneratorUi();
       bindPlayerInvUi();
       bindCraftTableUi();
+      bindRecipesUi();
       bindBuildUi();
+      bindBaseEnterPrompt();
+      bindSleepPrompt();
       bindPauseUi();
       bound = true;
     }
@@ -3820,7 +6246,10 @@ window.IslandFoundry = (() => {
     closeGeneratorUi();
     closePlayerInvUi();
     closeCraftTableUi();
+    closeRecipesUi();
     closeBuildUi();
+    closeBaseEnterPrompt();
+    closeSleepPrompt();
     closePauseUi();
     window.KeaghanSfx?.startMusic?.();
     render();
@@ -3846,10 +6275,20 @@ window.IslandFoundry = (() => {
     closeGeneratorUi();
     closePlayerInvUi();
     closeCraftTableUi();
+    closeRecipesUi();
     closeBuildUi();
+    closeBaseEnterPrompt();
+    closeSleepPrompt();
     closePauseUi();
     if (state) saveState(state);
   }
+
+  function persistOnLeave() {
+    if (state && playActive) saveState(state);
+  }
+
+  window.addEventListener("pagehide", persistOnLeave);
+  window.addEventListener("beforeunload", persistOnLeave);
 
   return {
     SLOT_COUNT,

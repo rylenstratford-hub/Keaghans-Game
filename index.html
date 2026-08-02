@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Space+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="css/styles.css" />
+    <link rel="stylesheet" href="css/styles.css?v=20260804z" />
   </head>
   <body>
     <div class="atmosphere" aria-hidden="true">
@@ -18,6 +18,7 @@
       <div class="atmosphere__glow atmosphere__glow--right"></div>
       <div class="sky" id="sky-layer" hidden>
         <div class="sky__wash"></div>
+        <div class="sky__glow" id="sky-glow" aria-hidden="true"></div>
         <div class="sky__stars"></div>
         <div class="sky__sun" title="Sun"></div>
         <div class="sky__moon" title="Moon"></div>
@@ -276,35 +277,83 @@
             <div id="world-grid" class="world-grid" role="grid" aria-label="Resource island"></div>
             <p id="game-toast" class="game-toast" hidden></p>
             <p class="world-help">
-              <strong>Tab</strong> craft · <strong>Q</strong> build (exits place mode; from
-              demolish opens build menu) · <strong>1–6</strong> switch buildings ·
-              <strong>F</strong> demolish · <strong>Esc</strong> closes menus, then pauses.
+              <strong>W A S D</strong> move (empty land only) · interact in your <strong>3×3</strong> ·
+              monsters <strong>6:00 p.m.–6:00 a.m.</strong> (fist 1 dmg / sword one-shot) ·
+              stand on base + <strong>LMB</strong> to enter indoor map ·
+              <strong>🚪</strong> leave · <strong>⬆</strong> upgrade ·
+              <strong>Tab</strong> craft ·
+              <strong>E</strong> recipes (hand + machines) ·
+              <strong>Q</strong> build (exits place mode; from demolish opens build menu) ·
+              <strong>1–7</strong> switch buildings · <strong>F</strong> demolish ·
+              <strong>Esc</strong> closes menus, then pauses.
               Resources regrow at <strong>6:00 a.m.</strong> unless a building covers the node.
             </p>
           </section>
 
           <aside class="side-panels">
-            <section class="day-clock" aria-label="Day and night clock">
-              <div class="day-clock__dial" role="img" aria-labelledby="clock-time">
-                <div class="day-clock__ring">
-                  <span class="day-clock__pole day-clock__pole--day">Day</span>
-                  <span class="day-clock__pole day-clock__pole--night">Night</span>
+            <div class="clock-hunger">
+              <section class="day-clock" aria-label="Day and night clock">
+                <div class="day-clock__dial" role="img" aria-labelledby="clock-time">
+                  <div class="day-clock__ring">
+                    <span class="day-clock__pole day-clock__pole--day">Day</span>
+                    <span class="day-clock__pole day-clock__pole--night">Night</span>
 
-                  <div class="day-clock__mid">
-                    <div class="day-clock__hand-layer" aria-hidden="true">
-                      <div id="clock-hand" class="day-clock__hand">
-                        <span class="day-clock__hand-shaft"></span>
-                        <span class="day-clock__hand-tip"></span>
+                    <div class="day-clock__mid">
+                      <div class="day-clock__hand-layer" aria-hidden="true">
+                        <div id="clock-hand" class="day-clock__hand">
+                          <span class="day-clock__hand-shaft"></span>
+                          <span class="day-clock__hand-tip"></span>
+                        </div>
                       </div>
-                    </div>
-                    <div class="day-clock__hub" aria-hidden="true"></div>
-                    <div class="day-clock__digital">
-                      <time id="clock-time" class="day-clock__time">6:00 a.m.</time>
+                      <div class="day-clock__hub" aria-hidden="true"></div>
+                      <div class="day-clock__digital">
+                        <time id="clock-time" class="day-clock__time">6:00 a.m.</time>
+                      </div>
                     </div>
                   </div>
                 </div>
+              </section>
+
+              <div class="vitals" aria-label="Health and hunger">
+                <div
+                  class="hunger health"
+                  role="meter"
+                  aria-label="Health"
+                  aria-valuemin="0"
+                  aria-valuemax="10000"
+                  aria-valuenow="10000"
+                  id="health-meter"
+                >
+                  <div class="hunger__track" aria-hidden="true">
+                    <div id="health-fill" class="hunger__fill"></div>
+                  </div>
+                  <div class="hunger__meta">
+                    <span class="hunger__tag">HP</span>
+                    <span id="health-pct" class="hunger__pct">100%</span>
+                    <span id="health-points" class="hunger__points">10000/10000</span>
+                  </div>
+                </div>
+
+                <div
+                  class="hunger"
+                  role="meter"
+                  aria-label="Hunger"
+                  aria-valuemin="0"
+                  aria-valuemax="10000"
+                  aria-valuenow="10000"
+                  id="hunger-meter"
+                >
+                  <div class="hunger__track" aria-hidden="true">
+                    <div id="hunger-fill" class="hunger__fill"></div>
+                  </div>
+                  <div class="hunger__meta">
+                    <span class="hunger__tag">Food</span>
+                    <span id="hunger-pct" class="hunger__pct">100%</span>
+                    <span id="hunger-points" class="hunger__points">10000/10000</span>
+                  </div>
+                </div>
               </div>
-            </section>
+            </div>
 
             <section class="side-card advancements" aria-label="Advancements">
               <h2>Advancements</h2>
@@ -461,12 +510,7 @@
           </button>
         </header>
 
-        <div class="craft-station-body craft-station-body--player">
-          <section class="craft-station-col craft-station-col--list" aria-label="Craftables">
-            <h3>Craftables</h3>
-            <div id="player-inv-list" class="craft-list craft-list--station"></div>
-          </section>
-
+        <div class="craft-station-body craft-station-body--player craft-station-body--no-list">
           <section class="craft-station-col craft-station-col--grid" aria-label="Crafting grid">
             <h3>2×2 Craft</h3>
             <div class="craft-bench">
@@ -481,9 +525,27 @@
               ></button>
             </div>
             <p class="smelter-hint">
-              Click a craftable to arrange materials, click again (or the result) to craft when it
-              matches.
+              Press <strong>E</strong> for hand + machine recipes, then click one to arrange.
+              Click the result to craft.
             </p>
+          </section>
+          <!-- Kept for script hooks; craftables live in the E recipes menu. -->
+          <div id="player-inv-list" class="craft-list" hidden></div>
+
+          <section class="craft-station-col craft-station-col--eat" aria-label="Eat food">
+            <h3>Eat</h3>
+            <div
+              class="inv-eat"
+              data-inv-eat
+              role="region"
+              aria-label="Eat — drop food here"
+              title="Drop food here to eat (+10% hunger / HP). Blocked at 90%+ food. No right-click."
+            >
+              <span class="inv-eat__icon" aria-hidden="true">🍽</span>
+              <span class="inv-eat__label">Drop food</span>
+              <span class="inv-eat__hint">+10% · not at 90%+</span>
+            </div>
+            <p class="smelter-hint">Drag Apple / Carrot here to eat. No right-click. Blocked at 90%+ food.</p>
           </section>
 
           <section class="craft-station-col craft-station-col--tools" aria-label="Tools">
@@ -532,12 +594,7 @@
           </button>
         </header>
 
-        <div class="craft-station-body">
-          <section class="craft-station-col craft-station-col--list" aria-label="Craftables">
-            <h3>Craftables</h3>
-            <div id="craft-table-list" class="craft-list craft-list--station"></div>
-          </section>
-
+        <div class="craft-station-body craft-station-body--no-list craft-station-body--table">
           <section class="craft-station-col craft-station-col--grid" aria-label="Crafting grid">
             <h3>3×3 Craft</h3>
             <div class="craft-bench">
@@ -552,10 +609,11 @@
               ></button>
             </div>
             <p class="smelter-hint">
-              Click a craftable to arrange the 3×3 (basic + advanced). Tab still has 2×2 pocket
-              craft for basics only.
+              Press <strong>E</strong> for hand + table + machine recipes, then click one to
+              arrange. Click the result to craft.
             </p>
           </section>
+          <div id="craft-table-list" class="craft-list" hidden></div>
 
           <section class="craft-station-col craft-station-col--inv" aria-label="Inventory">
             <h3>Inventory</h3>
@@ -577,6 +635,84 @@
       </div>
     </div>
 
+    <div id="recipes-modal" class="smelter-modal recipes-modal" hidden>
+      <div class="smelter-modal__backdrop" data-recipes-close></div>
+      <div
+        class="smelter-panel recipes-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="recipes-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="recipes-title">Guide</h2>
+          <button
+            type="button"
+            class="smelter-panel__close"
+            data-recipes-close
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </header>
+        <p class="smelter-hint recipes-intro">
+          Choose <strong>Everything</strong>, <strong>Items</strong>, <strong>Tools</strong>,
+          <strong>Food</strong>, or <strong>Buildings</strong>, then click a square for how to
+          get/make it and what it’s used for. Press <strong>E</strong> anytime.
+        </p>
+        <div id="recipes-browser" class="recipes-browser"></div>
+      </div>
+    </div>
+
+    <div id="base-enter-modal" class="smelter-modal base-enter-modal" hidden>
+      <div class="smelter-modal__backdrop" data-base-enter="cancel"></div>
+      <div
+        class="smelter-panel pause-panel base-enter-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="base-enter-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="base-enter-title">Enter Base?</h2>
+        </header>
+        <p id="base-enter-hint" class="smelter-hint pause-hint">
+          Go inside your base? Monsters can't reach you while you're indoors.
+        </p>
+        <div class="pause-actions">
+          <button type="button" class="pause-btn pause-btn--resume" data-base-enter="enter">
+            Enter
+          </button>
+          <button type="button" class="pause-btn pause-btn--leave" data-base-enter="cancel">
+            Stay outside
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="sleep-modal" class="smelter-modal sleep-modal" hidden>
+      <div class="smelter-modal__backdrop" data-sleep="cancel"></div>
+      <div
+        class="smelter-panel pause-panel base-enter-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sleep-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="sleep-title">Sleep?</h2>
+        </header>
+        <p id="sleep-hint" class="smelter-hint pause-hint">
+          Sleep until 6:00 a.m.? Monsters leave at dawn.
+        </p>
+        <div class="pause-actions">
+          <button type="button" class="pause-btn pause-btn--resume" data-sleep="sleep">
+            Sleep
+          </button>
+          <button type="button" class="pause-btn pause-btn--leave" data-sleep="cancel">
+            Stay awake
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div id="build-modal" class="smelter-modal build-modal" hidden>
       <div class="smelter-modal__backdrop" data-build-close></div>
       <div
@@ -592,7 +728,7 @@
           </button>
         </header>
         <p class="smelter-hint build-hint">
-          Pick any structure to enter build mode (or press <strong>1–6</strong>). Materials are
+          Pick any structure to enter build mode (or press <strong>1–7</strong>). Materials are
           spent when you place it. Tab / Q / F still work. Grass or depleted nodes — drills on
           nodes.
         </p>
@@ -646,9 +782,12 @@
       </button>
     </div>
 
-    <script src="js/data.js" defer></script>
-    <script src="js/sfx.js" defer></script>
-    <script src="js/game.js" defer></script>
-    <script src="js/main.js" defer></script>
+    <!-- Full-viewport damage vignette (outside .app so nothing clips it). -->
+    <div id="damage-flash" class="damage-flash" aria-hidden="true"></div>
+
+    <script src="js/data.js?v=20260804z" defer></script>
+    <script src="js/sfx.js?v=20260804z" defer></script>
+    <script src="js/game.js?v=20260804z" defer></script>
+    <script src="js/main.js?v=20260804z" defer></script>
   </body>
 </html>

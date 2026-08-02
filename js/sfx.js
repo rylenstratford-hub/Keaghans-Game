@@ -400,6 +400,54 @@ window.KeaghanSfx = (() => {
     window.setTimeout(() => playOreDetune(), 40);
   }
 
+  /** Soft pop when picking food (carrot / apple). */
+  function playFoodPop() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const now = audio.currentTime;
+    const out = makeOut(audio, 0.58);
+    if (!out) return;
+
+    const pop = audio.createOscillator();
+    const popGain = audio.createGain();
+    const popFilter = audio.createBiquadFilter();
+    const base = 520 + Math.random() * 80;
+    pop.type = "sine";
+    pop.frequency.setValueAtTime(base, now);
+    pop.frequency.exponentialRampToValueAtTime(base * 0.45, now + 0.09);
+    popFilter.type = "lowpass";
+    popFilter.frequency.value = 2200;
+    popGain.gain.setValueAtTime(0.0001, now);
+    popGain.gain.exponentialRampToValueAtTime(0.85, now + 0.006);
+    popGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+    pop.connect(popFilter);
+    popFilter.connect(popGain);
+    popGain.connect(out);
+    pop.start(now);
+    pop.stop(now + 0.13);
+
+    const click = audio.createOscillator();
+    const clickGain = audio.createGain();
+    click.type = "triangle";
+    click.frequency.setValueAtTime(980 + Math.random() * 120, now);
+    click.frequency.exponentialRampToValueAtTime(420, now + 0.05);
+    clickGain.gain.setValueAtTime(0.0001, now);
+    clickGain.gain.exponentialRampToValueAtTime(0.28, now + 0.004);
+    clickGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
+    click.connect(clickGain);
+    clickGain.connect(out);
+    click.start(now);
+    click.stop(now + 0.07);
+
+    playNoise(audio, out, {
+      seconds: 0.035,
+      freq: 2400,
+      q: 0.9,
+      gain: 0.18,
+      type: "bandpass",
+    });
+  }
+
   function playHarvest(nodeType, destroyed) {
     if (nodeType === "tree") {
       if (destroyed) playTreeCrash();
@@ -410,6 +458,11 @@ window.KeaghanSfx = (() => {
     if (nodeType === "rock") {
       if (destroyed) playRockBreak();
       else playRockCrack();
+      return;
+    }
+
+    if (nodeType === "carrot") {
+      playFoodPop();
       return;
     }
 
@@ -478,11 +531,319 @@ window.KeaghanSfx = (() => {
   }
 
   function refreshVolumes() {
-    if (!ctx || !music.bus) return;
+    if (!ctx) return;
     const now = ctx.currentTime;
-    const target = music.paused ? 0.0001 : musicTargetGain();
-    music.bus.gain.cancelScheduledValues(now);
-    music.bus.gain.setTargetAtTime(target, now, 0.08);
+    if (music.bus) {
+      const target = music.paused ? 0.0001 : musicTargetGain();
+      music.bus.gain.cancelScheduledValues(now);
+      music.bus.gain.setTargetAtTime(target, now, 0.08);
+    }
+    refreshWeatherVolumes();
+  }
+
+  /* --- Weather ambience (rain loop + thunder cracks) --- */
+  const RAIN_LEVEL = 0.2;
+  const THUNDER_LEVEL = 0.85;
+  /** Quieter + low-passed while inside the base. */
+  const WEATHER_MUFFLE_GAIN = 0.28;
+  const WEATHER_MUFFLE_CUTOFF = 780;
+  const WEATHER_OPEN_CUTOFF = 18000;
+  // Matches .sky__lightning animation duration in styles.css
+  const THUNDER_CYCLE_MS = 7000;
+
+  let weatherFx = {
+    kind: null, // null | "rain" | "thunder"
+    paused: false,
+    muffled: false,
+    bus: null,
+    muffle: null,
+    sources: [],
+    nodes: [],
+    thunderTimer: 0,
+    thunderTimeouts: [],
+  };
+
+  function rainTargetGain() {
+    if (weatherFx.paused || music.paused) return 0.0001;
+    const muff = weatherFx.muffled ? WEATHER_MUFFLE_GAIN : 1;
+    return Math.max(0.0001, masterGain() * RAIN_LEVEL * muff);
+  }
+
+  function applyWeatherMuffleCutoff() {
+    if (!weatherFx.muffle) return;
+    const freq = weatherFx.muffled ? WEATHER_MUFFLE_CUTOFF : WEATHER_OPEN_CUTOFF;
+    const now = ctx?.currentTime ?? 0;
+    try {
+      weatherFx.muffle.frequency.cancelScheduledValues(now);
+      weatherFx.muffle.frequency.setTargetAtTime(freq, now, 0.18);
+    } catch {
+      weatherFx.muffle.frequency.value = freq;
+    }
+  }
+
+  function loopNoiseBuffer(audio, seconds) {
+    const len = Math.max(1, Math.floor(audio.sampleRate * seconds));
+    const buffer = audio.createBuffer(1, len, audio.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+    return buffer;
+  }
+
+  function refreshWeatherVolumes() {
+    if (!ctx || !weatherFx.bus) return;
+    const now = ctx.currentTime;
+    weatherFx.bus.gain.cancelScheduledValues(now);
+    weatherFx.bus.gain.setTargetAtTime(rainTargetGain(), now, 0.25);
+  }
+
+  function clearThunderSchedule() {
+    if (weatherFx.thunderTimer) {
+      window.clearInterval(weatherFx.thunderTimer);
+      weatherFx.thunderTimer = 0;
+    }
+    for (const id of weatherFx.thunderTimeouts) window.clearTimeout(id);
+    weatherFx.thunderTimeouts = [];
+  }
+
+  function stopRainLoop() {
+    clearThunderSchedule();
+    const bus = weatherFx.bus;
+    const muffle = weatherFx.muffle;
+    const sources = weatherFx.sources.slice();
+    const nodes = weatherFx.nodes.slice();
+    weatherFx.bus = null;
+    weatherFx.muffle = null;
+    weatherFx.sources = [];
+    weatherFx.nodes = [];
+    weatherFx.kind = null;
+
+    if (ctx && bus) {
+      try {
+        bus.gain.cancelScheduledValues(ctx.currentTime);
+        bus.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.2);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    window.setTimeout(() => {
+      for (const src of sources) {
+        try {
+          src.stop();
+        } catch {
+          /* ignore */
+        }
+        try {
+          src.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
+      for (const node of nodes) {
+        try {
+          node.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        bus?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      try {
+        muffle?.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }, 500);
+  }
+
+  function startRainLoop() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    if (weatherFx.bus) {
+      applyWeatherMuffleCutoff();
+      refreshWeatherVolumes();
+      return;
+    }
+
+    weatherFx.bus = audio.createGain();
+    weatherFx.bus.gain.value = 0.0001;
+    weatherFx.muffle = audio.createBiquadFilter();
+    weatherFx.muffle.type = "lowpass";
+    weatherFx.muffle.Q.value = 0.65;
+    weatherFx.muffle.frequency.value = weatherFx.muffled
+      ? WEATHER_MUFFLE_CUTOFF
+      : WEATHER_OPEN_CUTOFF;
+    weatherFx.bus.connect(weatherFx.muffle);
+    weatherFx.muffle.connect(audio.destination);
+
+    // Soft high drizzle
+    const drizzle = audio.createBufferSource();
+    drizzle.buffer = loopNoiseBuffer(audio, 2.5);
+    drizzle.loop = true;
+    const drizzleFilter = audio.createBiquadFilter();
+    drizzleFilter.type = "bandpass";
+    drizzleFilter.frequency.value = 1800;
+    drizzleFilter.Q.value = 0.55;
+    const drizzleGain = audio.createGain();
+    drizzleGain.gain.value = 0.55;
+    drizzle.connect(drizzleFilter);
+    drizzleFilter.connect(drizzleGain);
+    drizzleGain.connect(weatherFx.bus);
+    drizzle.start();
+    weatherFx.sources.push(drizzle);
+    weatherFx.nodes.push(drizzleFilter, drizzleGain);
+
+    // Lower wet bed
+    const bed = audio.createBufferSource();
+    bed.buffer = loopNoiseBuffer(audio, 3.2);
+    bed.loop = true;
+    const bedFilter = audio.createBiquadFilter();
+    bedFilter.type = "lowpass";
+    bedFilter.frequency.value = 700;
+    bedFilter.Q.value = 0.4;
+    const bedGain = audio.createGain();
+    bedGain.gain.value = 0.4;
+    bed.connect(bedFilter);
+    bedFilter.connect(bedGain);
+    bedGain.connect(weatherFx.bus);
+    bed.start();
+    weatherFx.sources.push(bed);
+    weatherFx.nodes.push(bedFilter, bedGain);
+
+    weatherFx.bus.gain.linearRampToValueAtTime(rainTargetGain(), audio.currentTime + 1.1);
+  }
+
+  /** Sharp crack + low rumble — fires with lightning flashes. */
+  function playThunderCrack() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    if (weatherFx.paused || music.paused) return;
+    const scale = weatherFx.muffled ? THUNDER_LEVEL * WEATHER_MUFFLE_GAIN : THUNDER_LEVEL;
+    const vol = masterGain() * scale;
+    if (vol <= 0) return;
+    const out = audio.createGain();
+    out.gain.value = vol;
+    if (weatherFx.muffled) {
+      const lp = audio.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = 520;
+      lp.Q.value = 0.6;
+      out.connect(lp);
+      lp.connect(audio.destination);
+    } else {
+      out.connect(audio.destination);
+    }
+    const now = audio.currentTime;
+
+    // Initial crack
+    playNoise(audio, out, {
+      seconds: 0.18,
+      freq: 2200,
+      q: 0.7,
+      gain: 0.7,
+      type: "bandpass",
+      crackle: true,
+    });
+    playNoise(audio, out, {
+      seconds: 0.35,
+      freq: 420,
+      q: 0.5,
+      gain: 0.55,
+      type: "lowpass",
+      crackle: true,
+      delay: 0.02,
+    });
+
+    // Rolling boom
+    const boom = audio.createOscillator();
+    const boomGain = audio.createGain();
+    const boomFilter = audio.createBiquadFilter();
+    boom.type = "sine";
+    boom.frequency.setValueAtTime(78, now);
+    boom.frequency.exponentialRampToValueAtTime(32, now + 1.4);
+    boomFilter.type = "lowpass";
+    boomFilter.frequency.value = 180;
+    boomGain.gain.setValueAtTime(0.0001, now);
+    boomGain.gain.exponentialRampToValueAtTime(0.95, now + 0.03);
+    boomGain.gain.exponentialRampToValueAtTime(0.25, now + 0.35);
+    boomGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.8);
+    boom.connect(boomFilter);
+    boomFilter.connect(boomGain);
+    boomGain.connect(out);
+    boom.start(now);
+    boom.stop(now + 1.85);
+
+    // Distant after-rumble
+    playNoise(audio, out, {
+      seconds: 1.1,
+      freq: 140,
+      q: 0.35,
+      gain: 0.28,
+      type: "lowpass",
+      delay: 0.12,
+    });
+  }
+
+  function scheduleThunderStrike() {
+    // Align with sky-lightning-flash: first flash ~4% of 7s, then a little lag.
+    const delay = 280 + Math.random() * 420;
+    const id = window.setTimeout(() => {
+      playThunderCrack();
+      // Occasional double-strike like the visual double flash
+      if (Math.random() < 0.45) {
+        const id2 = window.setTimeout(() => playThunderCrack(), 120 + Math.random() * 180);
+        weatherFx.thunderTimeouts.push(id2);
+      }
+    }, delay);
+    weatherFx.thunderTimeouts.push(id);
+  }
+
+  function startThunderSchedule() {
+    clearThunderSchedule();
+    scheduleThunderStrike();
+    weatherFx.thunderTimer = window.setInterval(scheduleThunderStrike, THUNDER_CYCLE_MS);
+  }
+
+  /**
+   * Sync ambience to world weather.
+   * @param {null|"rain"|"thunder"|""} kind
+   */
+  function setWeather(kind) {
+    const next = kind === "rain" || kind === "thunder" ? kind : null;
+    if (next === weatherFx.kind) {
+      if (next) refreshWeatherVolumes();
+      return;
+    }
+
+    const wantRain = Boolean(next);
+    if (wantRain) startRainLoop();
+    else stopRainLoop();
+
+    if (next === "thunder") startThunderSchedule();
+    else clearThunderSchedule();
+
+    weatherFx.kind = next;
+  }
+
+  function setWeatherPaused(paused) {
+    weatherFx.paused = Boolean(paused);
+    if (weatherFx.paused) clearThunderSchedule();
+    else if (weatherFx.kind === "thunder") startThunderSchedule();
+    refreshWeatherVolumes();
+  }
+
+  /** Soften rain/thunder while the player is indoors. */
+  function setWeatherMuffled(muffled) {
+    const next = Boolean(muffled);
+    if (weatherFx.muffled === next) return;
+    weatherFx.muffled = next;
+    applyWeatherMuffleCutoff();
+    refreshWeatherVolumes();
   }
 
   function playTone(audio, bus, { freq, when, dur, peak, type = "triangle", filterFreq = 2400 }) {
@@ -840,20 +1201,24 @@ window.KeaghanSfx = (() => {
   function pauseMusic() {
     if (!music.playing) return;
     music.paused = true;
+    setWeatherPaused(true);
     refreshVolumes();
   }
 
   function resumeMusic() {
     if (!music.playing) {
       startMusic();
+      setWeatherPaused(false);
       return;
     }
     music.paused = false;
+    setWeatherPaused(false);
     refreshVolumes();
   }
 
   function stopMusic() {
     clearMusicTimer();
+    setWeather(null);
     if (ctx && music.bus) {
       const now = ctx.currentTime;
       try {
@@ -897,7 +1262,12 @@ window.KeaghanSfx = (() => {
     playRockCrack,
     playRockBreak,
     playOreDetune,
+    playFoodPop,
     playHarvest,
+    playThunderCrack,
+    setWeather,
+    setWeatherPaused,
+    setWeatherMuffled,
     startMusic,
     stopMusic,
     pauseMusic,

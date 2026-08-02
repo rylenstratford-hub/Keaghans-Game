@@ -62,7 +62,7 @@ input {
   background:
     radial-gradient(ellipse 80% 50% at 50% 110%, rgba(240, 180, 41, 0.12), transparent 55%),
     linear-gradient(165deg, #0b1210 0%, #14201c 45%, #0e1814 100%);
-  transition: background 1.2s ease;
+  /* No background transition — solid color swaps flash black between phases. */
 }
 
 /* In-game sky wash + sun/moon follow the day clock. */
@@ -79,7 +79,34 @@ input {
 .sky__wash {
   position: absolute;
   inset: 0;
-  transition: opacity 1.2s ease, background 1.2s ease;
+  /* Default so the layer never flashes empty/black before JS paints. */
+  background: linear-gradient(180deg, #6eb7e0 0%, #9ed0c0 48%, #6a9a70 100%);
+  /* Do not transition `background` — gradient swaps can't interpolate and flash black. */
+  transition: opacity 0.6s ease;
+}
+
+/* Soft light bloom that tracks the sun/moon position (set in JS). */
+.sky__glow {
+  position: absolute;
+  left: 50%;
+  top: 20%;
+  width: clamp(18rem, 58vw, 42rem);
+  height: clamp(14rem, 46vh, 30rem);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  background: radial-gradient(
+    ellipse at center,
+    var(--sky-glow-color, rgba(255, 230, 150, 0.45)) 0%,
+    transparent 68%
+  );
+  transition:
+    left 0.55s linear,
+    top 0.55s linear,
+    opacity 0.9s ease,
+    filter 0.8s ease;
 }
 
 .sky__stars {
@@ -103,17 +130,23 @@ input {
 .sky__sun,
 .sky__moon {
   position: absolute;
+  left: 50%;
+  top: 50%;
   border-radius: 50%;
   opacity: 0;
   transform: translate(-50%, -50%) scale(0.85);
+  /* Smooth follow as the day clock advances (positions set in JS). */
   transition:
-    top 1.4s ease,
-    left 1.4s ease,
-    right 1.4s ease,
+    top 0.55s linear,
+    left 0.55s linear,
     opacity 0.9s ease,
-    transform 1.4s ease,
-    box-shadow 1.2s ease;
+    transform 0.55s linear,
+    box-shadow 1.2s ease,
+    background 1.2s ease,
+    filter 0.8s ease;
   pointer-events: none;
+  /* Above clouds so the body stays readable with its sky glow. */
+  z-index: 3;
 }
 
 .sky__sun {
@@ -155,6 +188,7 @@ input {
   inset: 0 0 35% 0;
   overflow: hidden;
   opacity: 0.85;
+  z-index: 2;
   transition: opacity 1.2s ease, filter 1.2s ease;
 }
 
@@ -321,7 +355,9 @@ input {
 }
 
 .sky[data-weather="rain"] .sky__wash,
-.sky[data-weather="thunder"] .sky__wash {
+.sky[data-weather="thunder"] .sky__wash,
+.sky[data-weather="rain"] .sky__glow,
+.sky[data-weather="thunder"] .sky__glow {
   filter: brightness(0.88) saturate(0.9);
 }
 
@@ -553,18 +589,14 @@ input {
   mask-image: linear-gradient(to top, #000 30%, transparent 100%);
 }
 
-/* Phase: sunrise 6–7 a.m. — sun rising on the left */
-.sky[data-phase="sunrise"] .sky__wash {
-  background:
-    radial-gradient(ellipse 55% 45% at 8% 70%, rgba(255, 160, 70, 0.55), transparent 60%),
-    linear-gradient(180deg, #3a4a6a 0%, #c47a4a 42%, #f0b429 68%, #5a3a28 100%);
+/* Phase: sunrise 6–7 a.m. */
+.sky[data-phase="sunrise"] {
+  --sky-glow-color: rgba(255, 160, 70, 0.55);
 }
+/* Wash colors are painted in JS from the sun/moon position. */
 .sky[data-phase="sunrise"] .sky__sun {
-  opacity: 1;
-  left: 8%;
-  top: 58%;
-  transform: translate(-50%, -50%) scale(1);
-  z-index: 1;
+  background:
+    radial-gradient(circle at 35% 35%, #fff4c2 0%, #f0b429 42%, #e29a3a 70%, #c4922a 100%);
 }
 .sky[data-phase="sunrise"] .sky__terrain {
   --mountain-giant: #7a5e5c;
@@ -593,17 +625,14 @@ input {
   opacity: 0.35;
 }
 
-/* Phase: day 7 a.m.–12 p.m. — sun top-left */
-.sky[data-phase="day-morning"] .sky__wash {
-  background:
-    radial-gradient(ellipse 50% 40% at 18% 12%, rgba(255, 230, 150, 0.45), transparent 55%),
-    linear-gradient(180deg, #6eb7e0 0%, #9ed0c0 45%, #6a9a70 100%);
+/* Phase: day 7 a.m.–12 p.m. */
+.sky[data-phase="day-morning"] {
+  --sky-glow-color: rgba(255, 230, 150, 0.45);
 }
 .sky[data-phase="day-morning"] .sky__sun {
-  opacity: 1;
-  left: 16%;
-  top: 14%;
-  transform: translate(-50%, -50%) scale(1);
+  box-shadow:
+    0 0 40px rgba(240, 180, 41, 0.55),
+    0 0 90px rgba(240, 180, 41, 0.28);
 }
 .sky[data-phase="day-morning"] .sky__terrain {
   --mountain-giant: #6e8aa0;
@@ -620,17 +649,11 @@ input {
   --grass-deep: #245830;
 }
 
-/* Phase: noon 12–1 p.m. — sun at the top */
-.sky[data-phase="noon"] .sky__wash {
-  background:
-    radial-gradient(ellipse 45% 35% at 50% 8%, rgba(255, 245, 200, 0.55), transparent 55%),
-    linear-gradient(180deg, #7ec8ff 0%, #b5e4c8 48%, #78b070 100%);
+/* Phase: noon 12–1 p.m. */
+.sky[data-phase="noon"] {
+  --sky-glow-color: rgba(255, 245, 200, 0.55);
 }
 .sky[data-phase="noon"] .sky__sun {
-  opacity: 1;
-  left: 50%;
-  top: 10%;
-  transform: translate(-50%, -50%) scale(1.08);
   box-shadow:
     0 0 50px rgba(255, 230, 140, 0.65),
     0 0 110px rgba(240, 180, 41, 0.35);
@@ -656,17 +679,14 @@ input {
   opacity: 0.7;
 }
 
-/* Phase: day 1–6 p.m. — sun top-right */
-.sky[data-phase="day-afternoon"] .sky__wash {
-  background:
-    radial-gradient(ellipse 50% 40% at 82% 14%, rgba(255, 210, 120, 0.4), transparent 55%),
-    linear-gradient(180deg, #5aa6d4 0%, #9bc4a0 50%, #628a58 100%);
+/* Phase: day 1–6 p.m. */
+.sky[data-phase="day-afternoon"] {
+  --sky-glow-color: rgba(255, 210, 120, 0.42);
 }
 .sky[data-phase="day-afternoon"] .sky__sun {
-  opacity: 1;
-  left: 84%;
-  top: 14%;
-  transform: translate(-50%, -50%) scale(1);
+  box-shadow:
+    0 0 40px rgba(240, 180, 41, 0.5),
+    0 0 90px rgba(240, 180, 41, 0.25);
 }
 .sky[data-phase="day-afternoon"] .sky__terrain {
   --mountain-giant: #6a88a0;
@@ -683,20 +703,16 @@ input {
   --grass-deep: #245028;
 }
 
-/* Phase: sunset 6–7 p.m. — sun setting on the right */
-.sky[data-phase="sunset"] .sky__wash {
-  background:
-    radial-gradient(ellipse 55% 45% at 92% 68%, rgba(255, 120, 60, 0.55), transparent 60%),
-    linear-gradient(180deg, #2a3558 0%, #b85a3a 45%, #f0a030 70%, #4a2a20 100%);
+/* Phase: sunset 6–7 p.m. */
+.sky[data-phase="sunset"] {
+  --sky-glow-color: rgba(255, 120, 60, 0.55);
 }
 .sky[data-phase="sunset"] .sky__sun {
-  opacity: 1;
-  left: 92%;
-  top: 58%;
-  transform: translate(-50%, -50%) scale(1.05);
-  z-index: 1;
   background:
     radial-gradient(circle at 35% 35%, #ffe0a0 0%, #ff8a3a 45%, #d4542a 75%, #8a2a18 100%);
+  box-shadow:
+    0 0 45px rgba(255, 140, 60, 0.55),
+    0 0 100px rgba(240, 120, 40, 0.3);
 }
 .sky[data-phase="sunset"] .sky__terrain {
   --mountain-giant: #6a4048;
@@ -725,20 +741,17 @@ input {
   opacity: 0.25;
 }
 
-/* Phase: night 7 p.m.–12 a.m. — moon top-left */
-.sky[data-phase="night-evening"] .sky__wash {
-  background:
-    radial-gradient(ellipse 40% 35% at 16% 12%, rgba(160, 190, 255, 0.18), transparent 55%),
-    linear-gradient(180deg, #070b16 0%, #121c2a 45%, #0a1612 100%);
+/* Phase: night 7 p.m.–12 a.m. */
+.sky[data-phase="night-evening"] {
+  --sky-glow-color: rgba(160, 190, 255, 0.22);
 }
 .sky[data-phase="night-evening"] .sky__stars {
   opacity: 0.9;
 }
 .sky[data-phase="night-evening"] .sky__moon {
-  opacity: 1;
-  left: 16%;
-  top: 14%;
-  transform: translate(-50%, -50%) scale(1);
+  box-shadow:
+    0 0 28px rgba(180, 210, 255, 0.35),
+    0 0 70px rgba(120, 160, 220, 0.2);
 }
 .sky[data-phase="night-evening"] .sky__terrain {
   --mountain-giant: #182430;
@@ -768,20 +781,17 @@ input {
   opacity: 0.08;
 }
 
-/* Phase: midnight 12–1 a.m. — moon at the top */
-.sky[data-phase="midnight"] .sky__wash {
-  background:
-    radial-gradient(ellipse 40% 32% at 50% 8%, rgba(180, 200, 255, 0.2), transparent 55%),
-    linear-gradient(180deg, #04060e 0%, #0c1422 45%, #080e12 100%);
+/* Phase: midnight 12–1 a.m. */
+.sky[data-phase="midnight"] {
+  --sky-glow-color: rgba(180, 200, 255, 0.24);
 }
 .sky[data-phase="midnight"] .sky__stars {
   opacity: 1;
 }
 .sky[data-phase="midnight"] .sky__moon {
-  opacity: 1;
-  left: 50%;
-  top: 10%;
-  transform: translate(-50%, -50%) scale(1.08);
+  box-shadow:
+    0 0 34px rgba(180, 210, 255, 0.42),
+    0 0 80px rgba(120, 160, 220, 0.28);
 }
 .sky[data-phase="midnight"] .sky__terrain {
   --mountain-giant: #101820;
@@ -811,20 +821,17 @@ input {
   opacity: 0.05;
 }
 
-/* Phase: night 1–6 a.m. — moon top-right */
-.sky[data-phase="night-late"] .sky__wash {
-  background:
-    radial-gradient(ellipse 40% 35% at 84% 12%, rgba(150, 180, 240, 0.16), transparent 55%),
-    linear-gradient(180deg, #060a14 0%, #101a28 45%, #0c1612 100%);
+/* Phase: night 1–6 a.m. */
+.sky[data-phase="night-late"] {
+  --sky-glow-color: rgba(150, 180, 240, 0.2);
 }
 .sky[data-phase="night-late"] .sky__stars {
   opacity: 0.85;
 }
 .sky[data-phase="night-late"] .sky__moon {
-  opacity: 1;
-  left: 84%;
-  top: 14%;
-  transform: translate(-50%, -50%) scale(1);
+  box-shadow:
+    0 0 28px rgba(180, 210, 255, 0.35),
+    0 0 70px rgba(120, 160, 220, 0.2);
 }
 .sky[data-phase="night-late"] .sky__terrain {
   --mountain-giant: #142030;
@@ -862,26 +869,13 @@ input {
   opacity: 0.18;
 }
 
-.atmosphere[data-sky-phase="sunrise"],
-.atmosphere[data-sky-phase="sunset"] {
-  background: #1a1210;
-}
-
-.atmosphere[data-sky-phase="day-morning"],
-.atmosphere[data-sky-phase="noon"],
-.atmosphere[data-sky-phase="day-afternoon"] {
-  background: #1a2a24;
-}
-
-.atmosphere[data-sky-phase="night-evening"],
-.atmosphere[data-sky-phase="midnight"],
-.atmosphere[data-sky-phase="night-late"] {
-  background: #060a12;
-}
+/* Keep the soft title atmosphere always — solid phase fills caused a black flash
+   when the sky layer was briefly hidden or mid-update. */
 
 @media (prefers-reduced-motion: reduce) {
   .sky__sun,
   .sky__moon,
+  .sky__glow,
   .sky__wash,
   .sky__stars,
   .sky__terrain,
@@ -920,6 +914,10 @@ input {
   .sky[data-weather="thunder"] .sky__lightning {
     animation: none;
     opacity: 0.12;
+  }
+
+  .tile__monster {
+    animation: none;
   }
 }
 
@@ -1662,10 +1660,77 @@ input {
 }
 
 .screen--play {
+  position: relative;
   width: min(1200px, 100%);
   display: grid;
   gap: 0.85rem;
   animation: rise 0.45s ease-out both;
+}
+
+/* Sudden red screen edge when HP drops, then fades out.
+   Stay display:block always — animating from display:none skips the flash.
+   Prefer inset box-shadow for the rim (border-color alone is easy to miss). */
+.damage-flash {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  display: block;
+  visibility: hidden;
+  opacity: 0;
+  border: 0;
+  box-sizing: border-box;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 36%,
+    rgba(180, 10, 20, 0.2) 70%,
+    rgba(140, 0, 10, 0.65) 100%
+  );
+  box-shadow: inset 0 0 0 0 rgba(255, 40, 50, 0);
+}
+
+.damage-flash.is-active {
+  visibility: visible;
+  animation: damage-vignette 0.9s ease-out forwards;
+}
+
+@keyframes damage-vignette {
+  0% {
+    opacity: 1;
+    box-shadow:
+      inset 0 0 0 12px rgba(255, 45, 55, 1),
+      inset 0 0 90px 28px rgba(170, 0, 18, 0.8);
+    background: radial-gradient(
+      ellipse at center,
+      transparent 30%,
+      rgba(210, 10, 25, 0.38) 64%,
+      rgba(160, 0, 12, 0.82) 100%
+    );
+  }
+  40% {
+    opacity: 1;
+    box-shadow:
+      inset 0 0 0 10px rgba(255, 50, 60, 0.95),
+      inset 0 0 70px 22px rgba(160, 0, 16, 0.65);
+    background: radial-gradient(
+      ellipse at center,
+      transparent 36%,
+      rgba(190, 10, 20, 0.28) 70%,
+      rgba(140, 0, 10, 0.55) 100%
+    );
+  }
+  100% {
+    opacity: 0;
+    box-shadow:
+      inset 0 0 0 0 rgba(255, 40, 50, 0),
+      inset 0 0 40px 0 rgba(140, 0, 10, 0);
+    background: radial-gradient(
+      ellipse at center,
+      transparent 50%,
+      rgba(180, 10, 20, 0) 80%,
+      rgba(140, 0, 10, 0) 100%
+    );
+  }
 }
 
 .hud {
@@ -1758,6 +1823,7 @@ input {
 }
 
 .tile {
+  position: relative;
   aspect-ratio: 1;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 8px;
@@ -1773,9 +1839,123 @@ input {
     filter 0.12s ease;
 }
 
+.tile--player {
+  box-shadow: inset 0 0 0 1px rgba(240, 180, 41, 0.35);
+}
+
+.tile__player {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  transform: translate(-50%, -50%);
+  font-size: clamp(1.05rem, 2.8vw, 1.55rem);
+  line-height: 1;
+  pointer-events: none;
+  z-index: 3;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.65));
+}
+
+.tile--player .tile__icon {
+  opacity: 0.55;
+}
+
+.tile--monster {
+  box-shadow: inset 0 0 0 1px rgba(180, 40, 70, 0.55);
+}
+
+.tile__monster {
+  position: absolute;
+  left: 50%;
+  top: 48%;
+  transform: translate(-50%, -50%);
+  font-size: clamp(1.05rem, 2.8vw, 1.55rem);
+  line-height: 1;
+  pointer-events: none;
+  z-index: 2;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.7));
+  animation: monster-lurch 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes monster-lurch {
+  from {
+    transform: translate(-50%, -54%);
+  }
+  to {
+    transform: translate(-46%, -46%);
+  }
+}
+
+.tile--monster .tile__icon {
+  opacity: 0.35;
+}
+
+.tile--out-of-reach {
+  opacity: 0.42;
+  filter: saturate(0.7);
+}
+
+.tile--out-of-reach:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
 .tile:hover {
   border-color: rgba(61, 220, 151, 0.55);
   z-index: 1;
+}
+
+/* Build aim: suppress default green hover; colored rim + faint structure ghost. */
+.world-grid.is-building .tile:hover:not(.is-build-preview) {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.tile.is-build-preview {
+  position: relative;
+  z-index: 2;
+  transform: scale(1.04);
+}
+
+.tile.is-build-blocked {
+  border: 2px solid #e04555;
+  box-shadow:
+    0 0 0 1px rgba(224, 69, 85, 0.4),
+    inset 0 0 18px rgba(160, 20, 30, 0.35);
+}
+
+.tile.is-build-player {
+  border: 2px solid #f0a03a;
+  box-shadow:
+    0 0 0 1px rgba(240, 160, 58, 0.45),
+    inset 0 0 18px rgba(180, 100, 20, 0.32);
+}
+
+.tile.is-build-missing {
+  border: 2px solid #e6c34a;
+  box-shadow:
+    0 0 0 1px rgba(230, 195, 74, 0.4),
+    inset 0 0 18px rgba(160, 120, 20, 0.28);
+}
+
+.tile.is-build-ready {
+  border: 2px solid #6ec8e8;
+  box-shadow:
+    0 0 0 1px rgba(110, 200, 232, 0.45),
+    inset 0 0 18px rgba(40, 120, 160, 0.28);
+}
+
+.tile.is-build-preview .tile__icon {
+  opacity: 0.3;
+}
+
+.tile__ghost {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: clamp(1.15rem, 3vw, 1.7rem);
+  line-height: 1;
+  opacity: 0.55;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
 }
 
 .tile__icon {
@@ -1805,6 +1985,113 @@ input {
 
 .tile--copper {
   background: linear-gradient(180deg, #7a4a28, #4a2c16);
+}
+
+.tile--carrot {
+  background: linear-gradient(180deg, #4a6a28, #2a4018);
+}
+
+.tile--death-crate {
+  background: linear-gradient(180deg, #5a4030, #2a1c14);
+  border-color: rgba(226, 154, 58, 0.65);
+  box-shadow: inset 0 0 12px rgba(240, 180, 41, 0.2);
+}
+
+.tile--base {
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.2);
+}
+
+.tile--base-t1 {
+  background: linear-gradient(180deg, rgba(120, 90, 50, 0.7), rgba(55, 38, 22, 0.95));
+  border-color: rgba(196, 160, 106, 0.55);
+}
+
+.tile--base-t2 {
+  background: linear-gradient(180deg, rgba(110, 115, 120, 0.75), rgba(50, 54, 58, 0.95));
+  border-color: rgba(160, 168, 176, 0.55);
+}
+
+.tile--base-t3 {
+  background:
+    linear-gradient(180deg, rgba(90, 110, 130, 0.55), rgba(40, 52, 66, 0.92)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(200, 210, 225, 0.08) 0 2px,
+      transparent 2px 8px
+    );
+  border-color: rgba(160, 185, 210, 0.55);
+  box-shadow: inset 0 0 10px rgba(120, 150, 180, 0.25);
+}
+
+/* Indoor base map tiles (10×10 rooms) */
+.world-grid.is-inside-base {
+  outline: 2px solid rgba(196, 160, 106, 0.35);
+  outline-offset: 4px;
+}
+
+.tile--interior-wall {
+  background: linear-gradient(180deg, rgba(55, 48, 42, 0.98), rgba(28, 24, 20, 0.98));
+  border-color: rgba(90, 80, 70, 0.55);
+}
+
+.tile--interior-exit {
+  background:
+    radial-gradient(circle at 50% 70%, rgba(240, 200, 120, 0.35), transparent 55%),
+    linear-gradient(180deg, rgba(70, 90, 70, 0.9), rgba(30, 45, 32, 0.95));
+  border-color: rgba(140, 200, 140, 0.55);
+}
+
+.tile--interior-upgrade {
+  background:
+    radial-gradient(circle at 50% 40%, rgba(120, 180, 255, 0.28), transparent 55%),
+    linear-gradient(180deg, rgba(60, 70, 90, 0.9), rgba(30, 36, 50, 0.95));
+  border-color: rgba(140, 170, 220, 0.55);
+}
+
+.tile--room-hall {
+  background: linear-gradient(180deg, rgba(88, 78, 62, 0.9), rgba(48, 40, 30, 0.96));
+  border-color: rgba(160, 140, 100, 0.35);
+}
+
+.tile--room-upgrade {
+  background: linear-gradient(180deg, rgba(70, 85, 110, 0.9), rgba(36, 46, 64, 0.96));
+  border-color: rgba(120, 150, 200, 0.4);
+}
+
+.tile--room-kitchen {
+  background: linear-gradient(180deg, rgba(110, 75, 55, 0.9), rgba(58, 36, 26, 0.96));
+  border-color: rgba(200, 130, 90, 0.4);
+}
+
+.tile--room-living {
+  background: linear-gradient(180deg, rgba(75, 100, 80, 0.9), rgba(36, 52, 40, 0.96));
+  border-color: rgba(130, 180, 140, 0.4);
+}
+
+.tile--room-storage {
+  background: linear-gradient(180deg, rgba(100, 80, 55, 0.9), rgba(52, 40, 26, 0.96));
+  border-color: rgba(180, 140, 80, 0.4);
+}
+
+.tile--room-bedroom {
+  background: linear-gradient(180deg, rgba(70, 95, 115, 0.9), rgba(32, 48, 62, 0.96));
+  border-color: rgba(140, 175, 200, 0.4);
+}
+
+.tile--interior-t2.tile--interior-wall {
+  background: linear-gradient(180deg, rgba(70, 74, 80, 0.98), rgba(36, 38, 42, 0.98));
+}
+
+.tile--interior-t3.tile--interior-wall {
+  background: linear-gradient(180deg, rgba(55, 65, 80, 0.98), rgba(28, 34, 44, 0.98));
+}
+
+.tile--interior-t2.tile--room-hall {
+  background: linear-gradient(180deg, rgba(95, 98, 104, 0.92), rgba(50, 52, 58, 0.96));
+}
+
+.tile--interior-t3.tile--room-hall {
+  background: linear-gradient(180deg, rgba(75, 88, 105, 0.92), rgba(38, 48, 60, 0.96));
 }
 
 .tile--depleted {
@@ -2443,15 +2730,116 @@ input {
   gap: 1rem;
 }
 
+.clock-hunger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  padding: 0.75rem 0.5rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .day-clock {
   display: grid;
   place-items: center;
-  padding: 0.75rem 0.5rem;
+  padding: 0;
+  flex: 0 0 168px;
+  width: 168px;
+  max-width: 168px;
+}
+
+.vitals {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.hunger {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.hunger__track {
+  position: relative;
+  flex: 0 0 0.85rem;
+  height: 5.5rem;
+  width: 0.85rem;
+  border-radius: 999px;
+  border: 1px solid rgba(240, 180, 41, 0.4);
+  background: rgba(8, 14, 12, 0.92);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.health .hunger__track {
+  border-color: rgba(226, 90, 100, 0.4);
+}
+
+.hunger__fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 100%;
+  transform-origin: bottom center;
+  /* Same vitals colors for HP + Food: green → orange-yellow ≤50% → red ≤15%. */
+  background: linear-gradient(180deg, #7dff9a 0%, #3db86a 55%, #2a7a48 100%);
+  transition: transform 0.25s ease, background 0.25s ease;
+}
+
+.hunger.is-low .hunger__fill {
+  background: linear-gradient(180deg, #ffe08a 0%, #f0b429 45%, #d98920 100%);
+}
+
+.hunger.is-critical .hunger__fill {
+  background: linear-gradient(180deg, #ff7a6a 0%, #e03528 55%, #9a1810 100%);
+}
+
+.hunger__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.12rem;
+  min-width: 3.4rem;
+}
+
+.hunger__tag {
+  font-family: var(--font-display);
+  font-size: 0.5rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(232, 245, 238, 0.55);
+  line-height: 1;
+}
+
+.hunger__pct {
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  color: #e8f5ee;
+  line-height: 1.1;
+}
+
+.hunger__points {
+  font-family: var(--font-display);
+  font-size: 0.52rem;
+  letter-spacing: 0.04em;
+  color: rgba(232, 245, 238, 0.65);
+  line-height: 1.15;
+  white-space: nowrap;
 }
 
 .day-clock__dial {
-  width: min(100%, 168px);
+  width: 168px;
+  height: 168px;
   aspect-ratio: 1;
+  flex-shrink: 0;
 }
 
 .day-clock__ring {
@@ -2766,6 +3154,50 @@ input {
     "inv  inv  inv";
 }
 
+.craft-station-body--no-list {
+  grid-template-columns: 1.2fr 0.9fr;
+  grid-template-areas:
+    "grid tools"
+    "inv  inv";
+}
+
+/* Tab inventory: craft | eat (top-middle) | tools */
+.craft-station-body--player.craft-station-body--no-list {
+  grid-template-columns: 1.15fr 0.72fr 0.95fr;
+  grid-template-areas:
+    "grid eat tools"
+    "inv  inv  inv";
+}
+
+.craft-station-body--no-list:not(.craft-station-body--player) {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "grid"
+    "inv";
+}
+
+/* Crafting Table: 3×3 bench centered at the top. */
+.craft-station-body--table .craft-station-col--grid {
+  justify-self: center;
+  width: min(100%, 22rem);
+  text-align: center;
+}
+
+.craft-station-body--table .craft-bench {
+  justify-content: center;
+}
+
+.craft-station-body--table .smelter-hint {
+  text-align: center;
+}
+
+.craft-col-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+
 .craft-station-col--list {
   grid-area: list;
   min-width: 0;
@@ -2781,6 +3213,15 @@ input {
   min-width: 0;
 }
 
+.craft-station-col--eat {
+  grid-area: eat;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
 .craft-station-col--inv {
   grid-area: inv;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -2794,6 +3235,221 @@ input {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--accent);
+}
+
+.craft-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.craft-col-head h3 {
+  margin: 0;
+}
+
+.craft-mini-btn {
+  appearance: none;
+  border: 1px solid rgba(61, 220, 151, 0.35);
+  background: rgba(18, 32, 28, 0.85);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 0.28rem 0.55rem;
+  border-radius: 0.4rem;
+  cursor: pointer;
+}
+
+.craft-mini-btn:hover {
+  border-color: rgba(240, 180, 41, 0.55);
+  color: var(--accent-hot);
+}
+
+.recipes-modal {
+  z-index: 10050;
+}
+
+.recipes-panel {
+  width: min(720px, 96vw);
+  max-height: min(86vh, 820px);
+  overflow: auto;
+}
+
+.recipes-intro {
+  margin: 0 0 0.85rem;
+}
+
+.recipes-browser {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.recipes-layout {
+  display: grid;
+  gap: 0.85rem;
+  align-items: start;
+}
+
+.recipes-layout--detail {
+  gap: 0.75rem;
+}
+
+.recipes-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-start;
+}
+
+.recipes-cat,
+.recipes-back {
+  appearance: none;
+  border: 1px solid rgba(61, 220, 151, 0.35);
+  background: rgba(18, 32, 28, 0.85);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.45rem;
+  cursor: pointer;
+}
+
+.recipes-cat:hover,
+.recipes-back:hover {
+  border-color: rgba(240, 180, 41, 0.55);
+  color: var(--accent-hot);
+}
+
+.recipes-cat.is-active {
+  border-color: rgba(240, 180, 41, 0.7);
+  background: rgba(240, 180, 41, 0.12);
+  color: var(--accent-hot);
+}
+
+.recipes-back {
+  justify-self: start;
+}
+
+.recipes-section h3 {
+  margin: 0 0 0.55rem;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.recipes-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(4.4rem, 1fr));
+  gap: 0.45rem;
+}
+
+.recipes-tile {
+  appearance: none;
+  aspect-ratio: 1;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.55rem;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--ink);
+  cursor: pointer;
+  padding: 0.35rem;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 0.2rem;
+  min-height: 4.4rem;
+}
+
+.recipes-tile:hover {
+  border-color: rgba(61, 220, 151, 0.45);
+}
+
+.recipes-tile.is-selected {
+  border-color: rgba(240, 180, 41, 0.75);
+  box-shadow: 0 0 0 1px rgba(240, 180, 41, 0.35);
+  background: rgba(240, 180, 41, 0.1);
+}
+
+.recipes-tile__icon {
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.recipes-tile__name {
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: center;
+  color: var(--muted);
+  max-width: 100%;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.recipes-tile.is-selected .recipes-tile__name {
+  color: var(--ink);
+}
+
+.recipes-detail {
+  border: 1px solid rgba(61, 220, 151, 0.22);
+  border-radius: 0.65rem;
+  background: rgba(10, 18, 16, 0.55);
+  padding: 0.9rem 1rem 1.05rem;
+  min-height: 8.5rem;
+}
+
+.recipes-detail--empty {
+  display: grid;
+  place-items: center;
+}
+
+.recipes-detail__head {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.85rem;
+}
+
+.recipes-detail__icon {
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.recipes-detail__head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  text-transform: none;
+}
+
+.recipes-detail__block + .recipes-detail__block {
+  margin-top: 0.75rem;
+}
+
+.recipes-detail__block h4 {
+  margin: 0 0 0.3rem;
+  font-family: var(--font-display);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-hot);
+}
+
+.recipes-detail__block p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+  font-size: 0.92rem;
 }
 
 .craft-list--station {
@@ -2886,6 +3542,70 @@ input {
   border-style: solid;
   border-color: rgba(226, 90, 70, 0.85);
   background: rgba(180, 50, 40, 0.22);
+  color: #ffc2b8;
+  box-shadow: 0 0 0 1px rgba(226, 90, 70, 0.35);
+}
+
+.inv-eat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  width: min(100%, 5.5rem);
+  min-height: 5.5rem;
+  margin: 0 auto;
+  padding: 0.5rem 0.4rem;
+  border: 1px dashed rgba(61, 220, 151, 0.4);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(255, 214, 120, 0.12), transparent 60%),
+    rgba(8, 14, 12, 0.55);
+  color: var(--muted);
+  user-select: none;
+  cursor: default;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.inv-eat__icon {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.inv-eat__label {
+  font-family: var(--font-display);
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #e8f5ee;
+}
+
+.inv-eat__hint {
+  font-size: 0.62rem;
+  color: rgba(126, 220, 160, 0.9);
+}
+
+.smelter-modal.is-dragging .inv-eat {
+  border-color: rgba(126, 220, 160, 0.65);
+  color: #d8ffe8;
+}
+
+.inv-eat.is-drop-hover {
+  border-style: solid;
+  border-color: rgba(126, 220, 160, 0.9);
+  background:
+    radial-gradient(circle at 50% 30%, rgba(126, 220, 160, 0.22), transparent 60%),
+    rgba(18, 40, 28, 0.75);
+  color: #e8fff0;
+  box-shadow: 0 0 0 1px rgba(61, 220, 151, 0.35);
+}
+
+.inv-eat.is-drop-hover.is-reject {
+  border-color: rgba(226, 90, 70, 0.85);
+  background: rgba(180, 50, 40, 0.18);
   color: #ffc2b8;
   box-shadow: 0 0 0 1px rgba(226, 90, 70, 0.35);
 }
@@ -3052,11 +3772,13 @@ input {
 
 @media (max-width: 800px) {
   .craft-station-body,
-  .craft-station-body--player {
+  .craft-station-body--player,
+  .craft-station-body--player.craft-station-body--no-list {
     grid-template-columns: 1fr;
     grid-template-areas:
       "list"
       "grid"
+      "eat"
       "tools"
       "inv";
   }
