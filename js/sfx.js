@@ -448,6 +448,62 @@ window.KeaghanSfx = (() => {
     });
   }
 
+  /** Short chew / crunch burst when eating food. */
+  function playFoodMunch() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const out = makeOut(audio, 0.64);
+    if (!out) return;
+
+    const bites = 3 + Math.floor(Math.random() * 2); // 3–4 munches
+    let t = 0;
+    for (let i = 0; i < bites; i++) {
+      const when = audio.currentTime + t;
+      const crunchFreq = 900 + Math.random() * 700;
+      const jawFreq = 120 + Math.random() * 40;
+
+      // Crispy mid chew
+      playNoise(audio, out, {
+        seconds: 0.055 + Math.random() * 0.025,
+        freq: crunchFreq,
+        q: 1.35,
+        gain: 0.42,
+        type: "bandpass",
+        delay: t,
+        crackle: true,
+      });
+      // Softer wet body
+      playNoise(audio, out, {
+        seconds: 0.07,
+        freq: 320 + Math.random() * 120,
+        q: 0.7,
+        gain: 0.28,
+        type: "lowpass",
+        delay: t + 0.008,
+      });
+
+      // Tiny jaw thud
+      const jaw = audio.createOscillator();
+      const jawGain = audio.createGain();
+      const jawFilter = audio.createBiquadFilter();
+      jaw.type = "triangle";
+      jaw.frequency.setValueAtTime(jawFreq, when);
+      jaw.frequency.exponentialRampToValueAtTime(Math.max(55, jawFreq * 0.55), when + 0.05);
+      jawFilter.type = "lowpass";
+      jawFilter.frequency.value = 420;
+      jawGain.gain.setValueAtTime(0.0001, when);
+      jawGain.gain.exponentialRampToValueAtTime(0.38, when + 0.005);
+      jawGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.07);
+      jaw.connect(jawFilter);
+      jawFilter.connect(jawGain);
+      jawGain.connect(out);
+      jaw.start(when);
+      jaw.stop(when + 0.08);
+
+      t += 0.1 + Math.random() * 0.045;
+    }
+  }
+
   function playHarvest(nodeType, destroyed) {
     if (nodeType === "tree") {
       if (destroyed) playTreeCrash();
@@ -548,8 +604,98 @@ window.KeaghanSfx = (() => {
   const WEATHER_MUFFLE_GAIN = 0.28;
   const WEATHER_MUFFLE_CUTOFF = 780;
   const WEATHER_OPEN_CUTOFF = 18000;
-  // Matches .sky__lightning animation duration in styles.css
+  // How often a full lightning wave can roll during thunder.
   const THUNDER_CYCLE_MS = 7000;
+  /** Warning glow on the 3×3 strike zone before impact (time to walk out). */
+  const LIGHTNING_WARN_MS = 2200;
+  const LIGHTNING_HIT_MS = 420;
+
+  /** Zigzag bolt silhouettes (viewBox 100×340). */
+  const LIGHTNING_BOLT_PATHS = [
+    "M52 0 L46 48 L68 62 L42 118 L70 142 L38 198 L58 230 L34 340",
+    "M50 0 L62 40 L40 78 L72 120 L44 168 L78 210 L36 268 L55 340",
+    "M48 0 L38 55 L66 72 L30 130 L80 155 L42 215 L64 255 L28 340",
+    "M55 0 L70 35 L45 90 L75 125 L40 175 L68 220 L48 275 L60 340",
+    "M50 0 L44 60 L58 95 L35 150 L62 185 L40 250 L52 300 L46 340",
+  ];
+
+  /** Fork branches drawn as secondary strokes on some bolts. */
+  const LIGHTNING_FORK_PATHS = [
+    "M46 118 L18 165 L28 210",
+    "M72 120 L92 168 L84 220",
+    "M66 72 L90 110 L78 155",
+    "M40 175 L12 220 L22 270",
+    "M62 185 L88 230 L70 280",
+  ];
+
+  /**
+   * Wave patterns: staggered bolts across the sky + cracks timed with hits.
+   * x = horizontal %; path/fork = shape indices; linger = longer glow.
+   */
+  const LIGHTNING_WAVE_PATTERNS = [
+    {
+      name: "cascade-left",
+      softFlash: false,
+      strikes: [
+        { x: 12, path: 0, fork: 0, delay: 0, crack: true, linger: false, scale: 1.05 },
+        { x: 34, path: 1, fork: 1, delay: 130, crack: true, linger: false, scale: 0.95 },
+        { x: 58, path: 2, fork: 2, delay: 260, crack: false, linger: true, scale: 1.1 },
+        { x: 82, path: 3, fork: 3, delay: 400, crack: true, linger: false, scale: 0.9 },
+      ],
+    },
+    {
+      name: "cascade-right",
+      softFlash: false,
+      strikes: [
+        { x: 88, path: 3, fork: 1, delay: 0, crack: true, linger: false, scale: 1 },
+        { x: 64, path: 4, fork: 4, delay: 110, crack: false, linger: false, scale: 1.08 },
+        { x: 40, path: 0, fork: 0, delay: 240, crack: true, linger: true, scale: 0.92 },
+        { x: 16, path: 2, fork: 2, delay: 380, crack: true, linger: false, scale: 1.05 },
+      ],
+    },
+    {
+      name: "fork-center",
+      softFlash: false,
+      strikes: [
+        { x: 50, path: 1, fork: 1, delay: 0, crack: true, linger: true, scale: 1.2 },
+        { x: 32, path: 0, fork: 0, delay: 90, crack: false, linger: false, scale: 0.85 },
+        { x: 68, path: 3, fork: 3, delay: 105, crack: true, linger: false, scale: 0.88 },
+        { x: 18, path: 4, fork: 4, delay: 300, crack: true, linger: false, scale: 0.95 },
+        { x: 84, path: 2, fork: 2, delay: 340, crack: false, linger: false, scale: 0.9 },
+      ],
+    },
+    {
+      name: "scatter",
+      softFlash: true,
+      strikes: [
+        { x: 22, path: 2, fork: -1, delay: 0, crack: true, linger: false, scale: 0.8 },
+        { x: 71, path: 0, fork: 0, delay: 70, crack: true, linger: false, scale: 1.05 },
+        { x: 45, path: 4, fork: 4, delay: 190, crack: false, linger: true, scale: 1.15 },
+        { x: 90, path: 1, fork: -1, delay: 310, crack: true, linger: false, scale: 0.75 },
+        { x: 8, path: 3, fork: 3, delay: 430, crack: false, linger: false, scale: 0.95 },
+      ],
+    },
+    {
+      name: "double-front",
+      softFlash: false,
+      strikes: [
+        { x: 28, path: 0, fork: 0, delay: 0, crack: true, linger: false, scale: 1.1 },
+        { x: 36, path: 1, fork: 1, delay: 55, crack: true, linger: false, scale: 0.95 },
+        { x: 74, path: 3, fork: 3, delay: 280, crack: true, linger: true, scale: 1.05 },
+        { x: 55, path: 2, fork: 2, delay: 450, crack: false, linger: false, scale: 0.85 },
+      ],
+    },
+    {
+      name: "ridge-hop",
+      softFlash: false,
+      strikes: [
+        { x: 15, path: 4, fork: -1, delay: 0, crack: true, linger: false, scale: 0.9 },
+        { x: 48, path: 1, fork: 1, delay: 160, crack: true, linger: true, scale: 1.18 },
+        { x: 78, path: 0, fork: 0, delay: 300, crack: true, linger: false, scale: 1 },
+        { x: 60, path: 3, fork: 3, delay: 420, crack: false, linger: false, scale: 0.8 },
+      ],
+    },
+  ];
 
   let weatherFx = {
     kind: null, // null | "rain" | "thunder"
@@ -561,6 +707,7 @@ window.KeaghanSfx = (() => {
     nodes: [],
     thunderTimer: 0,
     thunderTimeouts: [],
+    waveIndex: 0,
   };
 
   function rainTargetGain() {
@@ -598,6 +745,67 @@ window.KeaghanSfx = (() => {
     weatherFx.bus.gain.setTargetAtTime(rainTargetGain(), now, 0.25);
   }
 
+  function clearLightningVisuals() {
+    const flash = document.getElementById("sky-lightning-flash");
+    const bolts = document.getElementById("sky-lightning-bolts");
+    const mapFlash = document.getElementById("world-lightning-flash");
+    const mapBolts = document.getElementById("world-lightning-bolts");
+    if (flash) {
+      flash.classList.remove("is-flash", "is-flash-soft");
+    }
+    if (bolts) bolts.replaceChildren();
+    if (mapFlash) {
+      mapFlash.classList.remove("is-flash", "is-flash-soft");
+    }
+    if (mapBolts) mapBolts.replaceChildren();
+    document
+      .querySelectorAll(".tile--lightning-hit")
+      .forEach((tile) => tile.classList.remove("tile--lightning-hit"));
+    window.IslandFoundry?.clearLightningPreview?.();
+  }
+
+  function mapGridSize(grid) {
+    const cols =
+      Number.parseInt(getComputedStyle(grid).getPropertyValue("--cols"), 10) || 10;
+    const tiles = grid.querySelectorAll(".tile");
+    const rows = Math.max(1, Math.ceil(tiles.length / cols));
+    return { cols, rows, tiles };
+  }
+
+  /** Random outdoor tile center for a 3×3 strike. */
+  function pickMapStrikeCell(grid) {
+    const { cols, rows } = mapGridSize(grid);
+    return {
+      col: Math.floor(Math.random() * cols),
+      row: Math.floor(Math.random() * rows),
+    };
+  }
+
+  function tilesInStrikeRadius(grid, col, row) {
+    const { cols, rows, tiles } = mapGridSize(grid);
+    const hit = [];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const x = col + dx;
+        const y = row + dy;
+        if (x < 0 || x >= cols || y < 0 || y >= rows) continue;
+        const tile = tiles[y * cols + x];
+        if (tile) hit.push(tile);
+      }
+    }
+    return hit;
+  }
+
+  /** Outdoor island map only — no bolts while inside the base. */
+  function mapLightningTarget() {
+    const grid = document.getElementById("world-grid");
+    if (!grid || grid.classList.contains("is-inside-base")) return null;
+    const bolts = document.getElementById("world-lightning-bolts");
+    const flash = document.getElementById("world-lightning-flash");
+    if (!bolts || !flash) return null;
+    return { grid, bolts, flash };
+  }
+
   function clearThunderSchedule() {
     if (weatherFx.thunderTimer) {
       window.clearInterval(weatherFx.thunderTimer);
@@ -605,6 +813,7 @@ window.KeaghanSfx = (() => {
     }
     for (const id of weatherFx.thunderTimeouts) window.clearTimeout(id);
     weatherFx.thunderTimeouts = [];
+    clearLightningVisuals();
   }
 
   function stopRainLoop() {
@@ -789,22 +998,244 @@ window.KeaghanSfx = (() => {
     });
   }
 
-  function scheduleThunderStrike() {
-    // Align with sky-lightning-flash: first flash ~4% of 7s, then a little lag.
-    const delay = 280 + Math.random() * 420;
-    const id = window.setTimeout(() => {
+  function prefersReducedLightning() {
+    try {
+      return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+    } catch {
+      return false;
+    }
+  }
+
+  function buildBoltSvg(pathD, forkD, glowClass) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 100 340");
+    svg.setAttribute("aria-hidden", "true");
+
+    const glow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    glow.setAttribute("d", pathD);
+    glow.setAttribute("class", glowClass);
+    svg.appendChild(glow);
+
+    const core = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    core.setAttribute("d", pathD);
+    svg.appendChild(core);
+
+    if (forkD) {
+      const forkGlow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      forkGlow.setAttribute("d", forkD);
+      forkGlow.setAttribute("class", glowClass);
+      svg.appendChild(forkGlow);
+      const fork = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      fork.setAttribute("d", forkD);
+      svg.appendChild(fork);
+    }
+    return svg;
+  }
+
+  function boltGeometry(strike) {
+    const pathD =
+      LIGHTNING_BOLT_PATHS[strike.path % LIGHTNING_BOLT_PATHS.length] ||
+      LIGHTNING_BOLT_PATHS[0];
+    const forkD =
+      strike.fork >= 0
+        ? LIGHTNING_FORK_PATHS[strike.fork % LIGHTNING_FORK_PATHS.length]
+        : null;
+    return { pathD, forkD };
+  }
+
+  function spawnLightningBolt(boltsRoot, strike) {
+    const { pathD, forkD } = boltGeometry(strike);
+
+    const wrap = document.createElement("div");
+    wrap.className = "sky__bolt";
+    wrap.style.left = `calc(${strike.x}% - 2.5vw)`;
+    wrap.style.setProperty("--bolt-scale", String(strike.scale || 1));
+    wrap.style.setProperty("--bolt-tilt", `${strike.tilt || 0}deg`);
+
+    const anim = document.createElement("div");
+    anim.className = "sky__bolt-anim";
+    anim.appendChild(buildBoltSvg(pathD, forkD, "sky__bolt-glow"));
+    wrap.appendChild(anim);
+    boltsRoot.appendChild(wrap);
+
+    requestAnimationFrame(() => {
+      anim.classList.add(strike.linger ? "is-strike-linger" : "is-strike");
+    });
+
+    const life = strike.linger ? 750 : 480;
+    const clearId = window.setTimeout(() => {
+      wrap.remove();
+    }, life);
+    weatherFx.thunderTimeouts.push(clearId);
+  }
+
+  function spawnMapLightningBolt(boltsRoot, strike) {
+    const { pathD, forkD } = boltGeometry(strike);
+
+    const wrap = document.createElement("div");
+    wrap.className = "map-bolt";
+    // Anchor near the top of the island grid so bolts stab down into tiles.
+    wrap.style.left = `calc(${strike.x}% - 2vw)`;
+    wrap.style.top = `${Math.max(0, Math.min(22, (strike.mapTop ?? 4) + Math.random() * 8))}%`;
+    wrap.style.height = `${44 + Math.random() * 18}%`;
+    wrap.style.setProperty("--bolt-scale", String((strike.scale || 1) * 0.85));
+    wrap.style.setProperty("--bolt-tilt", `${strike.tilt || 0}deg`);
+
+    const anim = document.createElement("div");
+    anim.className = "map-bolt__anim";
+    anim.appendChild(buildBoltSvg(pathD, forkD, "map-bolt__glow"));
+    wrap.appendChild(anim);
+    boltsRoot.appendChild(wrap);
+
+    requestAnimationFrame(() => {
+      anim.classList.add(strike.linger ? "is-strike-linger" : "is-strike");
+    });
+
+    const life = strike.linger ? 750 : 480;
+    const clearId = window.setTimeout(() => {
+      wrap.remove();
+    }, life);
+    weatherFx.thunderTimeouts.push(clearId);
+  }
+
+  /** Briefly light up the 3×3 under a map strike. */
+  function flashMapStrikeTiles(grid, col, row) {
+    const hit = tilesInStrikeRadius(grid, col, row);
+    for (const tile of hit) tile.classList.add("tile--lightning-hit");
+    const clearId = window.setTimeout(() => {
+      for (const tile of hit) tile.classList.remove("tile--lightning-hit");
+    }, LIGHTNING_HIT_MS);
+    weatherFx.thunderTimeouts.push(clearId);
+  }
+
+  function pulseFlashElement(flash, soft) {
+    if (!flash) return;
+    flash.classList.remove("is-flash", "is-flash-soft");
+    void flash.offsetWidth;
+    flash.classList.add(soft ? "is-flash-soft" : "is-flash");
+    const clearId = window.setTimeout(() => {
+      flash.classList.remove("is-flash", "is-flash-soft");
+    }, soft ? 450 : 600);
+    weatherFx.thunderTimeouts.push(clearId);
+  }
+
+  function pulseSheetFlash(soft) {
+    pulseFlashElement(document.getElementById("sky-lightning-flash"), soft);
+    const map = mapLightningTarget();
+    if (map) pulseFlashElement(map.flash, soft);
+  }
+
+  /** Pick a wave pattern and fire staggered bolts + thunder cracks. */
+  function runLightningWave() {
+    if (weatherFx.paused || weatherFx.kind !== "thunder") return;
+
+    const boltsRoot = document.getElementById("sky-lightning-bolts");
+    if (!boltsRoot) {
       playThunderCrack();
-      // Occasional double-strike like the visual double flash
-      if (Math.random() < 0.45) {
-        const id2 = window.setTimeout(() => playThunderCrack(), 120 + Math.random() * 180);
-        weatherFx.thunderTimeouts.push(id2);
+      return;
+    }
+
+    const map = mapLightningTarget();
+    let target = null;
+    if (map) {
+      target = pickMapStrikeCell(map.grid);
+      // 3×3 glow first so the pioneer can step out before impact.
+      window.IslandFoundry?.previewLightningStrike?.(target.col, target.row);
+    }
+
+    if (prefersReducedLightning()) {
+      const warnId = window.setTimeout(() => {
+        if (weatherFx.paused || weatherFx.kind !== "thunder") {
+          window.IslandFoundry?.clearLightningPreview?.();
+          return;
+        }
+        pulseSheetFlash(true);
+        playThunderCrack();
+        if (target) {
+          const mapNow = mapLightningTarget();
+          if (mapNow) flashMapStrikeTiles(mapNow.grid, target.col, target.row);
+          window.IslandFoundry?.onLightningStrike?.(target.col, target.row);
+        } else {
+          window.IslandFoundry?.clearLightningPreview?.();
+        }
+      }, map && target ? LIGHTNING_WARN_MS : 0);
+      weatherFx.thunderTimeouts.push(warnId);
+      return;
+    }
+
+    const pattern =
+      LIGHTNING_WAVE_PATTERNS[weatherFx.waveIndex % LIGHTNING_WAVE_PATTERNS.length];
+    weatherFx.waveIndex += 1;
+
+    const { cols } = map ? mapGridSize(map.grid) : { cols: 10 };
+    const targetX =
+      target != null ? ((target.col + 0.5) / cols) * 100 : 50;
+
+    // Impact after the telegraph — bolts + crack + electrify check.
+    const impactId = window.setTimeout(() => {
+      if (weatherFx.paused || weatherFx.kind !== "thunder") {
+        window.IslandFoundry?.clearLightningPreview?.();
+        return;
       }
+
+      boltsRoot.replaceChildren();
+      const mapNow = mapLightningTarget();
+      if (mapNow) mapNow.bolts.replaceChildren();
+      pulseSheetFlash(Boolean(pattern.softFlash));
+
+      for (const base of pattern.strikes) {
+        const isMain = Boolean(base.linger) || base === pattern.strikes[0];
+        const strike = {
+          ...base,
+          x: isMain && target
+            ? Math.max(4, Math.min(94, targetX + (Math.random() * 4 - 2)))
+            : Math.max(4, Math.min(94, base.x + (Math.random() * 6 - 3))),
+          tilt: (Math.random() * 10 - 5).toFixed(1),
+          scale: (base.scale || 1) * (0.92 + Math.random() * 0.16),
+          mapTop: Math.random() * 10,
+        };
+        const id = window.setTimeout(() => {
+          if (weatherFx.paused || weatherFx.kind !== "thunder") return;
+          spawnLightningBolt(boltsRoot, strike);
+          const mapHit = mapLightningTarget();
+          if (mapHit && isMain && target) {
+            spawnMapLightningBolt(mapHit.bolts, strike);
+            flashMapStrikeTiles(mapHit.grid, target.col, target.row);
+            window.IslandFoundry?.onLightningStrike?.(target.col, target.row);
+            target = null; // only electrify once per wave
+          } else if (mapHit && !target) {
+            spawnMapLightningBolt(mapHit.bolts, strike);
+          }
+          if (strike.crack) playThunderCrack();
+          if (strike.linger) pulseSheetFlash(true);
+        }, strike.delay);
+        weatherFx.thunderTimeouts.push(id);
+      }
+
+      // If no strike marked itself main somehow, still resolve the warn.
+      const fallbackId = window.setTimeout(() => {
+        if (target) {
+          window.IslandFoundry?.onLightningStrike?.(target.col, target.row);
+          target = null;
+        }
+      }, 900);
+      weatherFx.thunderTimeouts.push(fallbackId);
+    }, map && target ? LIGHTNING_WARN_MS : 0);
+    weatherFx.thunderTimeouts.push(impactId);
+  }
+
+  function scheduleThunderStrike() {
+    // Stagger wave start a bit so storms don't feel metronomic.
+    const delay = 220 + Math.random() * 520;
+    const id = window.setTimeout(() => {
+      runLightningWave();
     }, delay);
     weatherFx.thunderTimeouts.push(id);
   }
 
   function startThunderSchedule() {
     clearThunderSchedule();
+    weatherFx.waveIndex = Math.floor(Math.random() * LIGHTNING_WAVE_PATTERNS.length);
     scheduleThunderStrike();
     weatherFx.thunderTimer = window.setInterval(scheduleThunderStrike, THUNDER_CYCLE_MS);
   }
@@ -1255,6 +1686,852 @@ window.KeaghanSfx = (() => {
     }, 600);
   }
 
+  /** ADA voice — Web Speech API (browser TTS). Enter skips via stopAdaSpeech. */
+  let adaVoice = null;
+  let adaSpeakTimer = 0;
+  let adaSpeaking = false;
+
+  function pickAdaVoice() {
+    if (!window.speechSynthesis) return null;
+    const voices = window.speechSynthesis.getVoices() || [];
+    if (!voices.length) return null;
+    const scored = voices.map((v) => {
+      const name = `${v.name} ${v.lang}`.toLowerCase();
+      let score = 0;
+      if (/en(-|_)?(us|gb|au)?/.test(v.lang.toLowerCase())) score += 5;
+      if (/female|woman|zira|samantha|susan|karen|moira|victoria|linda|hazel/.test(name)) {
+        score += 4;
+      }
+      if (/google|microsoft|natural|neural|premium/.test(name)) score += 2;
+      if (/male|david|mark|george|daniel/.test(name)) score -= 2;
+      return { v, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0]?.v || voices[0] || null;
+  }
+
+  function refreshAdaVoice() {
+    adaVoice = pickAdaVoice();
+  }
+
+  if (window.speechSynthesis) {
+    refreshAdaVoice();
+    window.speechSynthesis.onvoiceschanged = () => {
+      refreshAdaVoice();
+    };
+  }
+
+  function stopAdaSpeech() {
+    if (adaSpeakTimer) {
+      window.clearTimeout(adaSpeakTimer);
+      adaSpeakTimer = 0;
+    }
+    adaSpeaking = false;
+    try {
+      window.speechSynthesis?.cancel?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function isAdaSpeaking() {
+    if (adaSpeaking) return true;
+    try {
+      return Boolean(window.speechSynthesis?.speaking || window.speechSynthesis?.pending);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Speak an ADA line aloud. Soft, slightly quick delivery.
+   * Press Enter in-game to skip (stopAdaSpeech).
+   */
+  function speakAdaLine(text) {
+    if (!text || !window.speechSynthesis) return false;
+    const vol = masterGain();
+    if (vol <= 0.01) return false;
+
+    stopAdaSpeech();
+    if (!adaVoice) refreshAdaVoice();
+
+    const utter = new SpeechSynthesisUtterance(String(text));
+    utter.rate = 1.05;
+    utter.pitch = 1.15;
+    utter.volume = Math.max(0, Math.min(1, vol));
+    if (adaVoice) utter.voice = adaVoice;
+    utter.lang = adaVoice?.lang || "en-US";
+    utter.onstart = () => {
+      adaSpeaking = true;
+    };
+    utter.onend = () => {
+      adaSpeaking = false;
+    };
+    utter.onerror = () => {
+      adaSpeaking = false;
+    };
+
+    // Some browsers need a tick after cancel before speak.
+    adaSpeaking = true;
+    adaSpeakTimer = window.setTimeout(() => {
+      adaSpeakTimer = 0;
+      try {
+        window.speechSynthesis.speak(utter);
+      } catch {
+        adaSpeaking = false;
+      }
+    }, 40);
+    return true;
+  }
+
+  /**
+   * 6-7 audio:
+   * - setup/pre-load → crazy glitch stabs
+   * - watch → zoomies whooshes
+   * - setup + max loops → original fast chiptune frenzy (+ pipe-ish / kick-ish hits)
+   * Intensity 0–20 scales density/wildness with the loop counter.
+   *
+   * Note: cannot use Super Mario Bros. music/SFX (copyright). This is an original
+   * hyper platformer-style bed in the same chaotic spirit.
+   */
+  let sixSevenAudio = {
+    mode: "off", // off | setup | watch
+    timer: 0,
+    intensity: 0,
+  };
+
+  let sixSevenFrenzy = {
+    playing: false,
+    bus: null,
+    nodes: [],
+    oscillators: [],
+    timer: 0,
+    step: 0,
+    fxTimer: 0,
+  };
+
+  function stopSixSevenFrenzy() {
+    if (sixSevenFrenzy.timer) {
+      window.clearInterval(sixSevenFrenzy.timer);
+      sixSevenFrenzy.timer = 0;
+    }
+    if (sixSevenFrenzy.fxTimer) {
+      window.clearInterval(sixSevenFrenzy.fxTimer);
+      sixSevenFrenzy.fxTimer = 0;
+    }
+    stopOscList(sixSevenFrenzy.oscillators);
+    for (const node of sixSevenFrenzy.nodes) {
+      try {
+        node.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }
+    sixSevenFrenzy.nodes.length = 0;
+    if (sixSevenFrenzy.bus) {
+      try {
+        sixSevenFrenzy.bus.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }
+    sixSevenFrenzy.bus = null;
+    sixSevenFrenzy.playing = false;
+    sixSevenFrenzy.step = 0;
+  }
+
+  function stopSixSevenZoomies() {
+    if (sixSevenAudio.timer) {
+      window.clearInterval(sixSevenAudio.timer);
+      sixSevenAudio.timer = 0;
+    }
+    sixSevenAudio.mode = "off";
+    sixSevenAudio.intensity = 0;
+  }
+
+  function stopSixSevenAudio() {
+    stopSixSevenZoomies();
+    stopSixSevenFrenzy();
+  }
+
+  /**
+   * Creepy / ominous drone bed for the 6–7 blackout sting.
+   * Original Web Audio — low detuned drones + distant heartbeat, no samples.
+   */
+  let ominousMusic = {
+    playing: false,
+    bus: null,
+    nodes: [],
+    oscillators: [],
+    timer: 0,
+    step: 0,
+  };
+
+  function stopOminousMusic() {
+    if (ominousMusic.timer) {
+      window.clearInterval(ominousMusic.timer);
+      ominousMusic.timer = 0;
+    }
+    if (ctx && ominousMusic.bus) {
+      const now = ctx.currentTime;
+      try {
+        ominousMusic.bus.gain.cancelScheduledValues(now);
+        ominousMusic.bus.gain.setTargetAtTime(0.0001, now, 0.2);
+      } catch {
+        /* ignore */
+      }
+    }
+    const bus = ominousMusic.bus;
+    const oscs = ominousMusic.oscillators.slice();
+    const extras = ominousMusic.nodes.slice();
+    ominousMusic.playing = false;
+    ominousMusic.bus = null;
+    ominousMusic.oscillators = [];
+    ominousMusic.nodes = [];
+    ominousMusic.step = 0;
+
+    window.setTimeout(() => {
+      stopOscList(oscs);
+      for (const node of extras) {
+        try {
+          node.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        bus?.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }, 500);
+  }
+
+  function scheduleOminousPulse(audio, bus, when) {
+    // Distant slow "heartbeat" thud.
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    const filter = audio.createBiquadFilter();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(48, when);
+    osc.frequency.exponentialRampToValueAtTime(28, when + 0.35);
+    filter.type = "lowpass";
+    filter.frequency.value = 140;
+    gain.gain.setValueAtTime(0.0001, when);
+    gain.gain.exponentialRampToValueAtTime(0.55, when + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.55);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(bus);
+    osc.start(when);
+    osc.stop(when + 0.6);
+
+    // Thin dissonant glass above it.
+    const hi = audio.createOscillator();
+    const hiGain = audio.createGain();
+    hi.type = "triangle";
+    hi.frequency.setValueAtTime(622.25, when); // Eb5
+    hi.frequency.setValueAtTime(659.25, when + 0.18); // E5 — uneasy slide
+    hiGain.gain.setValueAtTime(0.0001, when);
+    hiGain.gain.exponentialRampToValueAtTime(0.07, when + 0.04);
+    hiGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.7);
+    hi.connect(hiGain);
+    hiGain.connect(bus);
+    hi.start(when);
+    hi.stop(when + 0.72);
+  }
+
+  function startOminousMusic() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    if (ominousMusic.playing) return;
+
+    ominousMusic.playing = true;
+    ominousMusic.step = 0;
+
+    const bus = audio.createGain();
+    bus.gain.value = 0.0001;
+    bus.connect(audio.destination);
+    const target = masterGain() * 0.42;
+    bus.gain.linearRampToValueAtTime(Math.max(0.0001, target), audio.currentTime + 1.4);
+    ominousMusic.bus = bus;
+    ominousMusic.nodes.push(bus);
+
+    // Detuned low drones (minor second grind).
+    const droneSpecs = [
+      { freq: 55, type: "sine", gain: 0.22 }, // A1
+      { freq: 58.27, type: "sine", gain: 0.16 }, // A#1 — clash
+      { freq: 82.41, type: "triangle", gain: 0.1 }, // E2
+      { freq: 110.5, type: "sawtooth", gain: 0.035 }, // slightly sharp A2
+    ];
+    for (const spec of droneSpecs) {
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      const filter = audio.createBiquadFilter();
+      osc.type = spec.type;
+      osc.frequency.value = spec.freq;
+      filter.type = "lowpass";
+      filter.frequency.value = 420;
+      filter.Q.value = 0.7;
+      gain.gain.value = spec.gain;
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(bus);
+      osc.start();
+      ominousMusic.oscillators.push(osc);
+      ominousMusic.nodes.push(gain, filter);
+    }
+
+    // Slow swirling noise bed.
+    const noise = audio.createBufferSource();
+    const noiseBuf = noiseBuffer(audio, 4, { crackle: true });
+    noise.buffer = noiseBuf;
+    noise.loop = true;
+    const noiseFilter = audio.createBiquadFilter();
+    const noiseGain = audio.createGain();
+    noiseFilter.type = "bandpass";
+    noiseFilter.frequency.value = 180;
+    noiseFilter.Q.value = 0.8;
+    noiseGain.gain.value = 0.045;
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(bus);
+    noise.start();
+    ominousMusic.oscillators.push(noise);
+    ominousMusic.nodes.push(noiseFilter, noiseGain);
+
+    scheduleOminousPulse(audio, bus, audio.currentTime + 0.2);
+    ominousMusic.timer = window.setInterval(() => {
+      if (!ominousMusic.playing || !ominousMusic.bus || !ctx) return;
+      scheduleOminousPulse(ctx, ominousMusic.bus, ctx.currentTime);
+      // Occasional deeper swell every other pulse.
+      if (ominousMusic.step % 2 === 1) {
+        const t = ctx.currentTime;
+        const swell = ctx.createOscillator();
+        const swellGain = ctx.createGain();
+        swell.type = "sine";
+        swell.frequency.setValueAtTime(36, t);
+        swell.frequency.linearRampToValueAtTime(44, t + 1.2);
+        swellGain.gain.setValueAtTime(0.0001, t);
+        swellGain.gain.linearRampToValueAtTime(0.2, t + 0.6);
+        swellGain.gain.linearRampToValueAtTime(0.0001, t + 1.6);
+        swell.connect(swellGain);
+        swellGain.connect(ominousMusic.bus);
+        swell.start(t);
+        swell.stop(t + 1.7);
+      }
+      ominousMusic.step += 1;
+    }, 1400);
+  }
+
+  /** Original descending "warp tube" blip — not Nintendo's pipe. */
+  function playSixSevenPipePop() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const now = audio.currentTime;
+    const out = makeOut(audio, 0.48);
+    if (!out) return;
+
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    const filter = audio.createBiquadFilter();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.exponentialRampToValueAtTime(110, now + 0.22);
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(2400, now);
+    filter.frequency.exponentialRampToValueAtTime(420, now + 0.22);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.45, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(out);
+    osc.start(now);
+    osc.stop(now + 0.26);
+
+    playNoise(audio, out, {
+      seconds: 0.08,
+      freq: 900,
+      q: 0.8,
+      gain: 0.16,
+      type: "bandpass",
+    });
+  }
+
+  /** Original short stomp/kick thump — not Nintendo's kick. */
+  function playSixSevenKickPop() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const now = audio.currentTime;
+    const out = makeOut(audio, 0.5);
+    if (!out) return;
+
+    const body = audio.createOscillator();
+    const bodyGain = audio.createGain();
+    body.type = "sine";
+    body.frequency.setValueAtTime(180, now);
+    body.frequency.exponentialRampToValueAtTime(48, now + 0.09);
+    bodyGain.gain.setValueAtTime(0.0001, now);
+    bodyGain.gain.exponentialRampToValueAtTime(0.85, now + 0.005);
+    bodyGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+    body.connect(bodyGain);
+    bodyGain.connect(out);
+    body.start(now);
+    body.stop(now + 0.12);
+
+    playNoise(audio, out, {
+      seconds: 0.045,
+      freq: 1200,
+      q: 1.1,
+      gain: 0.28,
+      type: "bandpass",
+      crackle: true,
+    });
+  }
+
+  /**
+   * Original fast chiptune frenzy for max-loop 6-7 pre-load.
+   * Bright major motif — intentionally different from any Mario tune.
+   */
+  function startSixSevenFrenzy() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    if (sixSevenFrenzy.playing) return;
+
+    stopSixSevenFrenzy();
+    sixSevenFrenzy.playing = true;
+    sixSevenFrenzy.step = 0;
+
+    const bus = audio.createGain();
+    bus.gain.value = Math.max(0.0001, masterGain() * 0.34);
+    bus.connect(audio.destination);
+    sixSevenFrenzy.bus = bus;
+    sixSevenFrenzy.nodes.push(bus);
+
+    // Semitone steps from A4 — original "factory dash" riff (not Mario).
+    const melody = [
+      0, 3, 7, 10, 12, 10, 7, 3,
+      5, 8, 12, 15, 12, 8, 5, 0,
+      7, 10, 14, 17, 14, 10, 7, 3,
+      12, 15, 19, 15, 12, 8, 5, 0,
+    ];
+    const bass = [0, 0, 7, 7, 5, 5, 3, 3, 0, 0, 8, 8, 7, 7, 5, 3];
+
+    const root = 440;
+    const stepMs = 85; // fast + crazy
+
+    const beep = (semi, dur, gainVal, type = "square", octave = 0) => {
+      const now = audio.currentTime;
+      const osc = audio.createOscillator();
+      const g = audio.createGain();
+      const f = root * Math.pow(2, (semi + octave * 12) / 12);
+      osc.type = type;
+      osc.frequency.setValueAtTime(f, now);
+      // Tiny wild detune for chaos.
+      osc.detune.setValueAtTime((Math.random() - 0.5) * 40, now);
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(gainVal, now + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+      osc.connect(g);
+      g.connect(bus);
+      osc.start(now);
+      osc.stop(now + dur + 0.02);
+      sixSevenFrenzy.oscillators.push(osc);
+      // Prune finished refs occasionally.
+      if (sixSevenFrenzy.oscillators.length > 40) {
+        sixSevenFrenzy.oscillators.splice(0, 20);
+      }
+    };
+
+    sixSevenFrenzy.timer = window.setInterval(() => {
+      if (!sixSevenFrenzy.playing || !sixSevenFrenzy.bus) return;
+      const i = sixSevenFrenzy.step;
+      const m = melody[i % melody.length];
+      const b = bass[i % bass.length];
+      // Occasional octave jump / double-hit for "sped up crazy" feel.
+      const crazy = Math.random() < 0.22;
+      beep(m, crazy ? 0.07 : 0.1, crazy ? 0.22 : 0.16, "square", crazy ? 1 : 0);
+      if (i % 2 === 0) beep(b, 0.12, 0.11, "triangle", -1);
+      if (crazy) beep(m + 7, 0.05, 0.1, "square", 1);
+      sixSevenFrenzy.step += 1;
+    }, stepMs);
+
+    // Pipe-ish / kick-ish accents over the frenzy bed.
+    playSixSevenPipePop();
+    sixSevenFrenzy.fxTimer = window.setInterval(() => {
+      if (!sixSevenFrenzy.playing) return;
+      if (Math.random() < 0.55) playSixSevenKickPop();
+      else playSixSevenPipePop();
+      if (Math.random() < 0.35) {
+        window.setTimeout(() => playSixSevenKickPop(), 60 + Math.random() * 90);
+      }
+    }, 280);
+  }
+
+  /**
+   * Arena boss theme — faster, denser, and more unhinged than setup frenzy.
+   * Reuses the frenzy bus so only one crazy bed can run.
+   */
+  function startSixSevenBossMusic() {
+    const audio = ensureCtx();
+    if (!audio) return;
+
+    stopOminousMusic();
+    stopSixSevenFrenzy();
+    sixSevenFrenzy.playing = true;
+    sixSevenFrenzy.step = 0;
+
+    const bus = audio.createGain();
+    bus.gain.value = Math.max(0.0001, masterGain() * 0.4);
+    bus.connect(audio.destination);
+    sixSevenFrenzy.bus = bus;
+    sixSevenFrenzy.nodes.push(bus);
+
+    // Discordant climb — intentionally nastier than the pre-load riff.
+    const melody = [
+      0, 1, 4, 7, 11, 12, 11, 7, 4, 1, 0, 6, 10, 13, 16, 13, 10, 6, 3, 0, 8, 12, 15, 19, 15, 12, 8, 5, 2, 0, 14,
+      17,
+    ];
+    const bass = [0, 1, 0, 7, 6, 7, 5, 4, 3, 2, 1, 0, 8, 7, 5, 3];
+    const root = 466.16; // slightly sharp A♯ — unsettled
+    const stepMs = 55;
+
+    const beep = (semi, dur, gainVal, type = "square", octave = 0) => {
+      const now = audio.currentTime;
+      const osc = audio.createOscillator();
+      const g = audio.createGain();
+      const f = root * Math.pow(2, (semi + octave * 12) / 12);
+      osc.type = type;
+      osc.frequency.setValueAtTime(f, now);
+      osc.detune.setValueAtTime((Math.random() - 0.5) * 80, now);
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(gainVal, now + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+      osc.connect(g);
+      g.connect(bus);
+      osc.start(now);
+      osc.stop(now + dur + 0.02);
+      sixSevenFrenzy.oscillators.push(osc);
+      if (sixSevenFrenzy.oscillators.length > 50) {
+        sixSevenFrenzy.oscillators.splice(0, 25);
+      }
+    };
+
+    sixSevenFrenzy.timer = window.setInterval(() => {
+      if (!sixSevenFrenzy.playing || !sixSevenFrenzy.bus) return;
+      const i = sixSevenFrenzy.step;
+      const m = melody[i % melody.length];
+      const b = bass[i % bass.length];
+      const crazy = Math.random() < 0.45;
+      beep(m, crazy ? 0.05 : 0.08, crazy ? 0.26 : 0.18, "square", crazy ? 1 : 0);
+      beep(b, 0.1, 0.13, "sawtooth", -1);
+      if (crazy) {
+        beep(m + 6, 0.04, 0.12, "square", 1);
+        beep(m - 1, 0.035, 0.08, "triangle", 0);
+      }
+      if (i % 3 === 0) beep(m + 12, 0.04, 0.09, "square", 0);
+      sixSevenFrenzy.step += 1;
+    }, stepMs);
+
+    playSixSevenKickPop();
+    playSixSevenPipePop();
+    sixSevenFrenzy.fxTimer = window.setInterval(() => {
+      if (!sixSevenFrenzy.playing) return;
+      playSixSevenKickPop();
+      if (Math.random() < 0.65) playSixSevenPipePop();
+      if (Math.random() < 0.5) {
+        window.setTimeout(() => playSixSevenKickPop(), 40 + Math.random() * 70);
+      }
+    }, 200);
+  }
+
+  function stopSixSevenBossMusic() {
+    stopSixSevenFrenzy();
+  }
+
+  /** Watching: hyper whooshes + chirpy zips. */
+  function playSixSevenZoomBurst(intensity = 0) {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const now = audio.currentTime;
+    const level = 0.42 + Math.min(20, intensity) * 0.012;
+    const out = makeOut(audio, level);
+    if (!out) return;
+
+    const zipCount = 2 + Math.min(6, Math.floor(intensity / 3));
+    for (let i = 0; i < zipCount; i++) {
+      const t0 = now + i * (0.045 - Math.min(0.02, intensity * 0.0008));
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      const filter = audio.createBiquadFilter();
+      osc.type = i % 2 === 0 ? "sawtooth" : "square";
+      const startF = 420 + Math.random() * 280 + intensity * 18;
+      const endF = startF * (2.4 + Math.random() * 1.6 + intensity * 0.04);
+      osc.frequency.setValueAtTime(startF, t0);
+      osc.frequency.exponentialRampToValueAtTime(endF, t0 + 0.09);
+      filter.type = "bandpass";
+      filter.frequency.setValueAtTime(900 + intensity * 40, t0);
+      filter.frequency.exponentialRampToValueAtTime(2800 + intensity * 80, t0 + 0.08);
+      filter.Q.value = 2.2;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.28 + Math.random() * 0.12, t0 + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.11);
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(out);
+      osc.start(t0);
+      osc.stop(t0 + 0.13);
+    }
+
+    playNoise(audio, out, {
+      seconds: 0.16 + Math.min(0.12, intensity * 0.004),
+      freq: 1400 + intensity * 55,
+      q: 0.7,
+      gain: 0.18 + intensity * 0.006,
+      type: "bandpass",
+    });
+
+    const skid = audio.createOscillator();
+    const skidGain = audio.createGain();
+    const skidFilter = audio.createBiquadFilter();
+    const skidAt = now + 0.02;
+    skid.type = "triangle";
+    skid.frequency.setValueAtTime(1600 + intensity * 30, skidAt);
+    skid.frequency.exponentialRampToValueAtTime(280 + Math.random() * 80, skidAt + 0.14);
+    skidFilter.type = "lowpass";
+    skidFilter.frequency.value = 3200;
+    skidGain.gain.setValueAtTime(0.0001, skidAt);
+    skidGain.gain.exponentialRampToValueAtTime(0.22, skidAt + 0.012);
+    skidGain.gain.exponentialRampToValueAtTime(0.0001, skidAt + 0.16);
+    skid.connect(skidFilter);
+    skidFilter.connect(skidGain);
+    skidGain.connect(out);
+    skid.start(skidAt);
+    skid.stop(skidAt + 0.18);
+  }
+
+  /** Pre-load: dissonant glitch chaos — wilder with more loops. */
+  function playSixSevenCrazyBurst(intensity = 0) {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const now = audio.currentTime;
+    const level = 0.5 + Math.min(20, intensity) * 0.014;
+    const out = makeOut(audio, level);
+    if (!out) return;
+
+    const hits = 3 + Math.min(8, Math.floor(intensity / 2.5));
+    for (let i = 0; i < hits; i++) {
+      const t0 = now + i * (0.03 + Math.random() * 0.04);
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      const filter = audio.createBiquadFilter();
+      const kinds = ["sawtooth", "square", "triangle"];
+      osc.type = kinds[i % kinds.length];
+      const base = 90 + Math.random() * 1400 + intensity * 25;
+      osc.frequency.setValueAtTime(base, t0);
+      if (Math.random() < 0.55) {
+        osc.frequency.exponentialRampToValueAtTime(
+          Math.max(60, base * (0.35 + Math.random() * 2.8)),
+          t0 + 0.07 + Math.random() * 0.06
+        );
+      } else {
+        osc.frequency.setValueAtTime(base * (1.5 + Math.random()), t0 + 0.02);
+        osc.frequency.setValueAtTime(base * (0.4 + Math.random() * 0.5), t0 + 0.05);
+      }
+      filter.type = Math.random() < 0.5 ? "bandpass" : "highpass";
+      filter.frequency.value = 400 + Math.random() * 4200;
+      filter.Q.value = 0.8 + Math.random() * 6;
+      const peak = 0.2 + Math.random() * 0.22 + intensity * 0.004;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(peak, t0 + 0.006);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.08 + Math.random() * 0.08);
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(out);
+      osc.start(t0);
+      osc.stop(t0 + 0.2);
+    }
+
+    playNoise(audio, out, {
+      seconds: 0.08 + Math.random() * 0.1 + intensity * 0.003,
+      freq: 800 + Math.random() * 5000,
+      q: 0.5 + Math.random() * 2,
+      gain: 0.2 + intensity * 0.008,
+      type: Math.random() < 0.5 ? "bandpass" : "highpass",
+      crackle: true,
+    });
+
+    // Random "static slap".
+    if (intensity > 0 || Math.random() < 0.7) {
+      playNoise(audio, out, {
+        seconds: 0.04 + Math.random() * 0.05,
+        freq: 2400 + Math.random() * 6000,
+        q: 0.4,
+        gain: 0.16 + intensity * 0.005,
+        type: "highpass",
+        delay: Math.random() * 0.08,
+        crackle: true,
+      });
+    }
+  }
+
+  function sixSevenBurstForMode(mode, intensity) {
+    if (mode === "setup") playSixSevenCrazyBurst(intensity);
+    else if (mode === "watch") playSixSevenZoomBurst(intensity);
+  }
+
+  /**
+   * @param {"off"|"setup"|"watch"} mode
+   * @param {number} intensity loop counter 0–20
+   */
+  function setSixSevenAudio(mode, intensity = 0) {
+    const nextMode = mode === "setup" || mode === "watch" ? mode : "off";
+    const next = Math.max(0, Math.min(20, Math.round(Number(intensity) || 0)));
+
+    if (nextMode === "off") {
+      stopSixSevenAudio();
+      return;
+    }
+
+    const wantFrenzy = nextMode === "setup" && next >= 20;
+    if (wantFrenzy) startSixSevenFrenzy();
+    else stopSixSevenFrenzy();
+
+    if (
+      sixSevenAudio.mode === nextMode &&
+      sixSevenAudio.intensity === next &&
+      sixSevenAudio.timer
+    ) {
+      return;
+    }
+
+    const modeChanged = sixSevenAudio.mode !== nextMode;
+    if (sixSevenAudio.timer) {
+      window.clearInterval(sixSevenAudio.timer);
+      sixSevenAudio.timer = 0;
+    }
+
+    sixSevenAudio.mode = nextMode;
+    sixSevenAudio.intensity = next;
+    if (modeChanged) sixSevenBurstForMode(nextMode, next);
+
+    // Pre-load crazy hits come faster; watch zoomies a bit roomier.
+    const gap =
+      nextMode === "setup"
+        ? Math.max(120, 640 - next * 26)
+        : Math.max(180, 860 - next * 30);
+
+    sixSevenAudio.timer = window.setInterval(() => {
+      sixSevenBurstForMode(sixSevenAudio.mode, sixSevenAudio.intensity);
+    }, gap);
+  }
+
+  /** @deprecated prefer setSixSevenAudio("watch"|"off", intensity) */
+  function setSixSevenZoomies(on, intensity = 0) {
+    setSixSevenAudio(on ? "watch" : "off", intensity);
+  }
+
+  /**
+   * Crowd chanting "6-7!" — intensity 0–1 controls how many people + how often.
+   * Used while approaching CH 8's finale message, then full blast on the kill sting.
+   */
+  let sixSevenCrowd = {
+    active: false,
+    timer: 0,
+    intensity: 0,
+    gapMs: 0,
+  };
+
+  function stopSixSevenCrowdChant() {
+    sixSevenCrowd.active = false;
+    sixSevenCrowd.intensity = 0;
+    sixSevenCrowd.gapMs = 0;
+    if (sixSevenCrowd.timer) {
+      window.clearInterval(sixSevenCrowd.timer);
+      sixSevenCrowd.timer = 0;
+    }
+    try {
+      window.speechSynthesis?.cancel?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function playSixSevenCrowdBurst() {
+    if (!sixSevenCrowd.active || !window.speechSynthesis) return;
+    const t = Math.max(0, Math.min(1, sixSevenCrowd.intensity || 0));
+    if (t <= 0.02) return;
+    const phrases = ["6-7!", "six seven!", "6 7!", "SIX SEVEN!", "six! seven!", "6-7!"];
+    const voices = window.speechSynthesis.getVoices?.() || [];
+    // Sparse early → a mob at full intensity.
+    const count = Math.max(1, Math.round(1 + t * 13 + Math.random() * (1 + t * 4)));
+    for (let i = 0; i < count; i++) {
+      const utter = new SpeechSynthesisUtterance(phrases[i % phrases.length]);
+      utter.rate = 0.85 + Math.random() * 0.75;
+      utter.pitch = 0.35 + Math.random() * 1.55;
+      utter.volume = Math.max(
+        0.08,
+        Math.min(1, masterGain() * (0.12 + t * 0.55 + Math.random() * 0.3 * t))
+      );
+      if (voices.length) {
+        utter.voice = voices[Math.floor(Math.random() * voices.length)];
+      }
+      // Tighter overlap as the crowd grows.
+      const delay = i * (18 + Math.random() * (55 - t * 25));
+      window.setTimeout(() => {
+        if (!sixSevenCrowd.active) return;
+        try {
+          window.speechSynthesis.speak(utter);
+        } catch {
+          /* ignore */
+        }
+      }, delay);
+    }
+  }
+
+  /**
+   * @param {number} intensity 0 = off, 1 = full stadium chant
+   */
+  function setSixSevenCrowdChant(intensity = 0) {
+    const next = Math.max(0, Math.min(1, Number(intensity) || 0));
+    if (next <= 0.02) {
+      stopSixSevenCrowdChant();
+      return;
+    }
+
+    const wasActive = sixSevenCrowd.active;
+    sixSevenCrowd.intensity = next;
+    sixSevenCrowd.active = true;
+
+    // Warm voices list on some browsers.
+    try {
+      window.speechSynthesis?.getVoices?.();
+    } catch {
+      /* ignore */
+    }
+
+    if (!wasActive) playSixSevenCrowdBurst();
+
+    // Closer to the finale → bursts stack faster.
+    const gap = Math.round(1650 - next * 1150); // ~1650ms → ~500ms
+    if (!sixSevenCrowd.timer || Math.abs(gap - sixSevenCrowd.gapMs) > 60) {
+      if (sixSevenCrowd.timer) {
+        window.clearInterval(sixSevenCrowd.timer);
+        sixSevenCrowd.timer = 0;
+      }
+      sixSevenCrowd.gapMs = gap;
+      sixSevenCrowd.timer = window.setInterval(() => {
+        if (!sixSevenCrowd.active) return;
+        playSixSevenCrowdBurst();
+      }, gap);
+    }
+  }
+
+  function startSixSevenCrowdChant() {
+    setSixSevenCrowdChant(1);
+  }
+
   return {
     playMenuClick,
     playTreeRustle,
@@ -1263,6 +2540,7 @@ window.KeaghanSfx = (() => {
     playRockBreak,
     playOreDetune,
     playFoodPop,
+    playFoodMunch,
     playHarvest,
     playThunderCrack,
     setWeather,
@@ -1274,5 +2552,21 @@ window.KeaghanSfx = (() => {
     resumeMusic,
     refreshVolumes,
     ensureCtx,
+    speakAdaLine,
+    stopAdaSpeech,
+    isAdaSpeaking,
+    playSixSevenZoomBurst,
+    playSixSevenCrazyBurst,
+    setSixSevenAudio,
+    setSixSevenZoomies,
+    stopSixSevenZoomies,
+    stopSixSevenAudio,
+    startOminousMusic,
+    stopOminousMusic,
+    startSixSevenBossMusic,
+    stopSixSevenBossMusic,
+    setSixSevenCrowdChant,
+    startSixSevenCrowdChant,
+    stopSixSevenCrowdChant,
   };
 })();

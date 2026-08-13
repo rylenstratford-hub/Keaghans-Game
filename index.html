@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Space+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="css/styles.css?v=20260804z" />
+    <link rel="stylesheet" href="css/styles.css?v=20260812u" />
   </head>
   <body>
     <div class="atmosphere" aria-hidden="true">
@@ -29,7 +29,10 @@
           <span class="sky__cloud sky__cloud--d"></span>
         </div>
         <div class="sky__storm-clouds" aria-hidden="true"></div>
-        <div class="sky__lightning" id="sky-lightning" aria-hidden="true"></div>
+        <div class="sky__lightning" id="sky-lightning" aria-hidden="true">
+          <div class="sky__lightning-flash" id="sky-lightning-flash"></div>
+          <div class="sky__lightning-bolts" id="sky-lightning-bolts"></div>
+        </div>
         <div class="sky__rain" id="sky-rain" aria-hidden="true"></div>
         <div class="sky__terrain" aria-hidden="true">
           <div class="sky__mountains" aria-hidden="true">
@@ -138,42 +141,136 @@
 
     <main class="app">
       <section id="screen-title" class="screen screen--title is-active" aria-label="Title screen">
-        <header class="brand">
-          <p class="brand__eyebrow">Craft · Automate · Explore</p>
-          <h1 class="brand__title">Satisfactory-Craft</h1>
-          <p class="brand__tagline">
-            Click to gather. Craft to grow. Build a factory that runs itself.
-          </p>
-        </header>
+        <!-- First viewport: title has room; Maggoo + line sit on the bottom until you scroll. -->
+        <div class="title-stage">
+          <div class="title-stage__main">
+            <header class="brand">
+              <p class="brand__eyebrow">Craft · Automate · Explore</p>
+              <h1 class="brand__title">Satisfactory-Craft</h1>
+              <p class="brand__tagline">
+                Click to gather. Craft to grow. Build a factory that runs itself.
+              </p>
+            </header>
 
-        <nav class="title-actions" aria-label="Main menu">
-          <button type="button" class="menu-btn menu-btn--side" data-action="settings">
-            <span class="menu-btn__icon" aria-hidden="true">⚙</span>
-            <span class="menu-btn__label">Settings</span>
-          </button>
+            <nav class="title-actions" aria-label="Main menu">
+              <button type="button" class="menu-btn menu-btn--side" data-action="settings">
+                <span class="menu-btn__icon" aria-hidden="true">⚙</span>
+                <span class="menu-btn__label">Settings</span>
+              </button>
 
-          <button
-            type="button"
-            class="menu-btn menu-btn--play is-locked"
-            data-action="play"
-            id="play-button"
-            disabled
-            aria-disabled="true"
-            title="Create a profile first"
-          >
-            <span class="menu-btn__icon" aria-hidden="true">▶</span>
-            <span class="menu-btn__label">Play</span>
-          </button>
+              <button
+                type="button"
+                class="menu-btn menu-btn--play is-locked"
+                data-action="play"
+                id="play-button"
+                disabled
+                aria-disabled="true"
+                title="Create a profile first"
+              >
+                <span class="menu-btn__icon" aria-hidden="true">▶</span>
+                <span class="menu-btn__label">Play</span>
+              </button>
 
-          <button type="button" class="menu-btn menu-btn--side" data-action="mod">
-            <span class="menu-btn__icon" aria-hidden="true">◇</span>
-            <span class="menu-btn__label">Mod</span>
-          </button>
-        </nav>
+              <button type="button" class="menu-btn menu-btn--side" data-action="mod">
+                <span class="menu-btn__icon" aria-hidden="true">◇</span>
+                <span class="menu-btn__label">Mod</span>
+              </button>
+            </nav>
 
-        <p id="play-gate-hint" class="play-gate-hint">
-          Create a profile (top left) before you can play.
-        </p>
+            <p id="play-gate-hint" class="play-gate-hint">
+              Create a profile (top left) before you can play.
+            </p>
+          </div>
+
+          <footer class="site-credit" id="site-credit">
+            <p class="site-credit__maggoo">This project is supported by the help of Maggoo</p>
+            <div class="site-credit__line" aria-hidden="true"></div>
+          </footer>
+        </div>
+
+        <section class="title-updates" aria-label="Update info">
+          <h2 class="title-updates__heading">Updates</h2>
+
+          <article class="update-card">
+            <h3 class="update-card__title">Workroom Crafting</h3>
+            <p class="update-card__copy">3×3 recipes — shape the grid, take the result.</p>
+            <div class="update-card__pics update-card__pics--single">
+              <figure class="update-card__fig">
+                <div class="update-preview update-preview--panel" aria-hidden="true">
+                  <div class="craft-bench update-preview__bench">
+                    <div class="craft-grid craft-grid--3">
+                      <button type="button" class="smelter-slot" tabindex="-1"><span class="smelter-slot__icon">🟫</span></button>
+                      <button type="button" class="smelter-slot" tabindex="-1"><span class="smelter-slot__icon">🟫</span></button>
+                      <button type="button" class="smelter-slot" tabindex="-1"><span class="smelter-slot__icon">🟫</span></button>
+                      <button type="button" class="smelter-slot is-empty" tabindex="-1"></button>
+                      <button type="button" class="smelter-slot" tabindex="-1"><span class="smelter-slot__icon">/</span></button>
+                      <button type="button" class="smelter-slot is-empty" tabindex="-1"></button>
+                      <button type="button" class="smelter-slot is-empty" tabindex="-1"></button>
+                      <button type="button" class="smelter-slot" tabindex="-1"><span class="smelter-slot__icon">/</span></button>
+                      <button type="button" class="smelter-slot is-empty" tabindex="-1"></button>
+                    </div>
+                    <span class="craft-bench__arrow">→</span>
+                    <button type="button" class="smelter-slot craft-result-slot" tabindex="-1">
+                      <span class="smelter-slot__icon">⛏</span>
+                    </button>
+                  </div>
+                </div>
+              </figure>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <h3 class="update-card__title">Iron Base</h3>
+            <p class="update-card__copy">Step on your Base to go inside.</p>
+            <div class="update-card__pics update-card__pics--single">
+              <figure class="update-card__fig">
+                <div class="world-grid is-inside-base update-preview__grid update-preview__grid--compact" style="--cols: 6" aria-hidden="true">
+                  <button type="button" class="tile tile--interior-wall" tabindex="-1"><span class="tile__icon">▮</span></button>
+                  <button type="button" class="tile" tabindex="-1"><span class="tile__icon">🍳</span></button>
+                  <button type="button" class="tile" tabindex="-1"><span class="tile__icon">⬆</span></button>
+                  <button type="button" class="tile tile--player" tabindex="-1"><span class="tile__icon">📺</span><span class="tile__player">🧑‍🔧</span></button>
+                  <button type="button" class="tile" tabindex="-1"><span class="tile__icon">🛏</span></button>
+                  <button type="button" class="tile tile--interior-wall" tabindex="-1"><span class="tile__icon">▮</span></button>
+                  <button type="button" class="tile tile--interior-wall" tabindex="-1"><span class="tile__icon">▮</span></button>
+                  <button type="button" class="tile" tabindex="-1"><span class="tile__icon">🔧</span></button>
+                  <button type="button" class="tile" tabindex="-1"><span class="tile__icon">🕯</span></button>
+                  <button type="button" class="tile" tabindex="-1"><span class="tile__icon">📦</span></button>
+                  <button type="button" class="tile tile--interior-exit" tabindex="-1"><span class="tile__icon">🚪</span></button>
+                  <button type="button" class="tile tile--interior-wall" tabindex="-1"><span class="tile__icon">▮</span></button>
+                </div>
+              </figure>
+            </div>
+          </article>
+
+          <article class="update-card update-card--featured">
+            <h3 class="update-card__title">6-7 Update</h3>
+            <p class="update-card__copy">Exact CH 6–7 → blackout → boss arena. Reach a door to unlock the mod.</p>
+            <div class="update-card__pics update-card__pics--single">
+              <figure class="update-card__fig">
+                <div class="six-seven-arena__grid update-preview__arena update-preview__arena--compact" style="--cols: 6" aria-hidden="true">
+                  <button type="button" class="six-seven-arena__cell is-wall" tabindex="-1">▮</button>
+                  <button type="button" class="six-seven-arena__cell is-door" tabindex="-1">🚪</button>
+                  <button type="button" class="six-seven-arena__cell is-wall" tabindex="-1">▮</button>
+                  <button type="button" class="six-seven-arena__cell is-door" tabindex="-1">🚪</button>
+                  <button type="button" class="six-seven-arena__cell is-wall" tabindex="-1">▮</button>
+                  <button type="button" class="six-seven-arena__cell is-wall" tabindex="-1">▮</button>
+                  <button type="button" class="six-seven-arena__cell is-wall" tabindex="-1">▮</button>
+                  <button type="button" class="six-seven-arena__cell is-boss" tabindex="-1">6-7</button>
+                  <button type="button" class="six-seven-arena__cell is-boss" tabindex="-1">6-7</button>
+                  <button type="button" class="six-seven-arena__cell is-minion" tabindex="-1">6-7</button>
+                  <button type="button" class="six-seven-arena__cell" tabindex="-1"></button>
+                  <button type="button" class="six-seven-arena__cell is-wall" tabindex="-1">▮</button>
+                  <button type="button" class="six-seven-arena__cell is-wall" tabindex="-1">▮</button>
+                  <button type="button" class="six-seven-arena__cell" tabindex="-1"></button>
+                  <button type="button" class="six-seven-arena__cell is-player" tabindex="-1">🧑‍🔧</button>
+                  <button type="button" class="six-seven-arena__cell is-minion" tabindex="-1">6-7</button>
+                  <button type="button" class="six-seven-arena__cell" tabindex="-1"></button>
+                  <button type="button" class="six-seven-arena__cell is-wall" tabindex="-1">▮</button>
+                </div>
+              </figure>
+            </div>
+          </article>
+        </section>
       </section>
 
       <section id="screen-profile" class="screen screen--panel" hidden aria-label="Profiles">
@@ -232,17 +329,39 @@
       </section>
 
       <section id="screen-mod" class="screen screen--panel" hidden aria-label="Mods">
-        <div class="panel">
-          <h2 class="panel__title">Mod</h2>
-          <p class="panel__copy">
-            Custom recipes, machines, and worlds will live here. Coming soon —
-            a place for Keaghan to invent new parts for the factory.
+        <div class="panel panel--mods">
+          <header class="mod-panel__head">
+            <h2 class="panel__title" id="mod-panel-title">Mods</h2>
+            <button
+              type="button"
+              class="mod-reset-btn"
+              data-action="reset-mods"
+              title="Reset mods"
+              aria-label="Reset mods"
+            >
+              Reset mods
+            </button>
+          </header>
+          <p class="panel__copy" id="mod-panel-copy">
+            Installed on the left, available on the right. Remove a mod from Installed to revert it.
+            Hidden mods stay ??? until you unlock them.
           </p>
-          <ul class="mod-list">
-            <li>Custom crafting recipes</li>
-            <li>New machines &amp; belts</li>
-            <li>Player-made islands</li>
-          </ul>
+          <div class="mod-columns" aria-label="Installed and available mods">
+            <section class="mod-column mod-column--installed" aria-labelledby="mod-installed-heading">
+              <h3 id="mod-installed-heading" class="mod-column__title">Installed</h3>
+              <ul class="mod-list" id="mod-installed-list">
+                <li class="mod-list__empty">No mods installed yet.</li>
+              </ul>
+            </section>
+            <section class="mod-column mod-column--available" aria-labelledby="mod-available-heading">
+              <h3 id="mod-available-heading" class="mod-column__title">Available</h3>
+              <ul class="mod-list" id="mod-available-list">
+                <li>Custom crafting recipes <span class="mod-list__tag">Soon</span></li>
+                <li>New machines &amp; belts <span class="mod-list__tag">Soon</span></li>
+                <li>Player-made islands <span class="mod-list__tag">Soon</span></li>
+              </ul>
+            </section>
+          </div>
           <button type="button" class="panel__back" data-action="back">Back</button>
         </div>
       </section>
@@ -274,91 +393,131 @@
 
         <div class="game-layout" id="game-root">
           <section class="world-panel" aria-label="Island">
-            <div id="world-grid" class="world-grid" role="grid" aria-label="Resource island"></div>
+            <div class="world-stage">
+              <div id="world-grid" class="world-grid" role="grid" aria-label="Resource island"></div>
+              <div id="world-lightning" class="world-lightning" aria-hidden="true">
+                <div class="world-lightning__flash" id="world-lightning-flash"></div>
+                <div class="world-lightning__bolts" id="world-lightning-bolts"></div>
+              </div>
+            </div>
             <p id="game-toast" class="game-toast" hidden></p>
-            <p class="world-help">
-              <strong>W A S D</strong> move (empty land only) · interact in your <strong>3×3</strong> ·
-              monsters <strong>6:00 p.m.–6:00 a.m.</strong> (fist 1 dmg / sword one-shot) ·
-              stand on base + <strong>LMB</strong> to enter indoor map ·
-              <strong>🚪</strong> leave · <strong>⬆</strong> upgrade ·
-              <strong>Tab</strong> craft ·
-              <strong>E</strong> recipes (hand + machines) ·
-              <strong>Q</strong> build (exits place mode; from demolish opens build menu) ·
-              <strong>1–7</strong> switch buildings · <strong>F</strong> demolish ·
-              <strong>Esc</strong> closes menus, then pauses.
-              Resources regrow at <strong>6:00 a.m.</strong> unless a building covers the node.
-            </p>
+            <aside class="ada-helper" aria-label="ADA helper">
+              <header class="ada-helper__head">
+                <span class="ada-helper__mark" aria-hidden="true">◈</span>
+                <strong class="ada-helper__name">ADA</strong>
+                <span class="ada-helper__link" title="Voice plays through Base habitat speakers">speakers</span>
+                <button
+                  type="button"
+                  id="ada-controls-btn"
+                  class="ada-helper__controls"
+                  title="Show keyboard controls"
+                >
+                  Controls
+                </button>
+              </header>
+              <p id="ada-line" class="ada-helper__line" role="status" aria-live="polite">
+                Pioneer. Systems online. Establish a foothold on the island.
+              </p>
+            </aside>
           </section>
 
           <aside class="side-panels">
             <div class="clock-hunger">
-              <section class="day-clock" aria-label="Day and night clock">
-                <div class="day-clock__dial" role="img" aria-labelledby="clock-time">
-                  <div class="day-clock__ring">
-                    <span class="day-clock__pole day-clock__pole--day">Day</span>
-                    <span class="day-clock__pole day-clock__pole--night">Night</span>
+              <div class="clock-hunger__stack">
+                <section class="day-clock" aria-label="Day and night clock">
+                  <div class="day-clock__dial" role="img" aria-labelledby="clock-time">
+                    <div class="day-clock__ring">
+                      <span class="day-clock__pole day-clock__pole--day">Day</span>
+                      <span class="day-clock__pole day-clock__pole--night">Night</span>
 
-                    <div class="day-clock__mid">
-                      <div class="day-clock__hand-layer" aria-hidden="true">
-                        <div id="clock-hand" class="day-clock__hand">
-                          <span class="day-clock__hand-shaft"></span>
-                          <span class="day-clock__hand-tip"></span>
+                      <div class="day-clock__mid">
+                        <div class="day-clock__hand-layer" aria-hidden="true">
+                          <div id="clock-hand" class="day-clock__hand">
+                            <span class="day-clock__hand-shaft"></span>
+                            <span class="day-clock__hand-tip"></span>
+                          </div>
                         </div>
-                      </div>
-                      <div class="day-clock__hub" aria-hidden="true"></div>
-                      <div class="day-clock__digital">
-                        <time id="clock-time" class="day-clock__time">6:00 a.m.</time>
+                        <div class="day-clock__hub" aria-hidden="true"></div>
+                        <div class="day-clock__digital">
+                          <time id="clock-time" class="day-clock__time">6:00 a.m.</time>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              </section>
+                </section>
 
-              <div class="vitals" aria-label="Health and hunger">
-                <div
-                  class="hunger health"
-                  role="meter"
-                  aria-label="Health"
-                  aria-valuemin="0"
-                  aria-valuemax="10000"
-                  aria-valuenow="10000"
-                  id="health-meter"
-                >
-                  <div class="hunger__track" aria-hidden="true">
-                    <div id="health-fill" class="hunger__fill"></div>
+                <div class="vitals" aria-label="Health and hunger">
+                  <div
+                    class="hunger health"
+                    role="meter"
+                    aria-label="Health"
+                    aria-valuemin="0"
+                    aria-valuemax="10000"
+                    aria-valuenow="10000"
+                    id="health-meter"
+                  >
+                    <div class="hunger__meta">
+                      <span class="hunger__tag">HP</span>
+                      <span id="health-pct" class="hunger__pct">100%</span>
+                      <span id="health-points" class="hunger__points">10000/10000</span>
+                    </div>
+                    <div class="hunger__track" aria-hidden="true">
+                      <div id="health-fill" class="hunger__fill"></div>
+                    </div>
                   </div>
-                  <div class="hunger__meta">
-                    <span class="hunger__tag">HP</span>
-                    <span id="health-pct" class="hunger__pct">100%</span>
-                    <span id="health-points" class="hunger__points">10000/10000</span>
+
+                  <div
+                    class="hunger"
+                    role="meter"
+                    aria-label="Hunger"
+                    aria-valuemin="0"
+                    aria-valuemax="10000"
+                    aria-valuenow="10000"
+                    id="hunger-meter"
+                  >
+                    <div class="hunger__meta">
+                      <span class="hunger__tag">Food</span>
+                      <span id="hunger-pct" class="hunger__pct">100%</span>
+                      <span id="hunger-points" class="hunger__points">10000/10000</span>
+                    </div>
+                    <div class="hunger__track" aria-hidden="true">
+                      <div id="hunger-fill" class="hunger__fill"></div>
+                    </div>
                   </div>
                 </div>
+              </div>
 
-                <div
-                  class="hunger"
-                  role="meter"
-                  aria-label="Hunger"
-                  aria-valuemin="0"
-                  aria-valuemax="10000"
-                  aria-valuenow="10000"
-                  id="hunger-meter"
-                >
-                  <div class="hunger__track" aria-hidden="true">
-                    <div id="hunger-fill" class="hunger__fill"></div>
+              <div
+                class="player-temp"
+                id="player-temp"
+                role="status"
+                aria-live="polite"
+                title="Island temperature"
+              >
+                <div class="player-temp__thermo" aria-hidden="true">
+                  <div class="player-temp__track">
+                    <div class="player-temp__fill" id="player-temp-fill"></div>
                   </div>
-                  <div class="hunger__meta">
-                    <span class="hunger__tag">Food</span>
-                    <span id="hunger-pct" class="hunger__pct">100%</span>
-                    <span id="hunger-points" class="hunger__points">10000/10000</span>
-                  </div>
+                  <div class="player-temp__bulb"></div>
+                </div>
+                <div class="player-temp__meta">
+                  <span class="player-temp__tag">Temp</span>
+                  <strong id="player-temp-value" class="player-temp__value">22°C</strong>
+                  <span id="player-temp-note" class="player-temp__note">Mild</span>
                 </div>
               </div>
             </div>
 
-            <section class="side-card advancements" aria-label="Advancements">
-              <h2>Advancements</h2>
-              <ol id="advancements-list" class="advancements-list"></ol>
-            </section>
+            <div class="side-charts">
+              <section class="side-card advancements" aria-label="Advancements">
+                <h2>Advancements</h2>
+                <ol id="advancements-list" class="advancements-list"></ol>
+              </section>
+              <section class="side-card easter-eggs" aria-label="Easter eggs">
+                <h2>Easter Eggs</h2>
+                <ol id="easter-eggs-list" class="easter-eggs-list"></ol>
+              </section>
+            </div>
           </aside>
         </div>
       </section>
@@ -412,14 +571,14 @@
                   title="Coal fuel input"
                 ></button>
               </div>
-              <p class="smelter-hint">Log, Planks, or Coal → heat (Log 15, Planks 5, Coal 20). Empty energy resets progress.</p>
+              <p class="smelter-hint">Wire to a Coal Generator for electric heat, or burn Log / Planks / Coal (15 / 5 / 20). Empty fuel heat resets progress.</p>
             </div>
           </section>
 
           <section class="smelter-col smelter-col--inv" aria-label="Inventory" data-smelter-drop="inv">
             <h3>Inventory</h3>
             <div id="smelter-inv-grid" class="smelter-grid smelter-grid--inv"></div>
-            <p class="smelter-hint">Drag ore → input · Drag log/coal → fuel · Drag back to inventory</p>
+            <p class="smelter-hint">Drag ore → input · Optional fuel if unpowered · Drag back to inventory</p>
           </section>
         </div>
       </div>
@@ -438,15 +597,15 @@
         <div class="smelter-panel__body generator-panel__body">
           <aside class="generator-col generator-col--lever" id="generator-lever-col" hidden aria-label="Outage reset">
             <h3>Outage</h3>
-            <div class="outage-lever" id="outage-lever" aria-label="Pull lever up to restore power">
+            <div class="outage-lever" id="outage-lever" aria-label="Slide switch up to ON to restore power">
               <div class="outage-lever__rail">
-                <span class="outage-lever__mark outage-lever__mark--up">UP</span>
+                <span class="outage-lever__mark outage-lever__mark--up">ON</span>
                 <div class="outage-lever__track">
-                  <div class="outage-lever__handle" id="outage-lever-handle" tabindex="0" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Outage lever"></div>
+                  <div class="outage-lever__handle" id="outage-lever-handle" tabindex="0" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Power switch — bottom OFF, top ON"></div>
                 </div>
-                <span class="outage-lever__mark outage-lever__mark--down">TRIP</span>
+                <span class="outage-lever__mark outage-lever__mark--down">OFF</span>
               </div>
-              <p class="smelter-hint">Pull the lever up to bring power back online.</p>
+              <p class="smelter-hint">Switch is OFF. Slide it up to ON to restore power.</p>
             </div>
           </aside>
 
@@ -461,24 +620,53 @@
               title="Coal fuel"
             ></button>
             <p id="generator-fuel-status" class="generator-status">Needs fuel</p>
-            <p class="smelter-hint">Drag Coal here. Burns while this generator stays online.</p>
+            <div
+              class="gen-temp"
+              id="generator-temp"
+              data-generator-drop="cool"
+              title="Temperature — drop Ice here to cool · overheat at 100°C"
+            >
+              <div class="gen-temp__thermo" aria-hidden="true">
+                <div class="gen-temp__track">
+                  <div class="gen-temp__fill" id="generator-temp-fill"></div>
+                </div>
+                <div class="gen-temp__bulb"></div>
+              </div>
+              <div class="gen-temp__meta">
+                <span class="gen-temp__name">Temp</span>
+                <strong id="generator-temp-label" class="gen-temp__value">20°C</strong>
+                <span class="gen-temp__hint">Overheat 100°C</span>
+              </div>
+            </div>
+            <p class="smelter-hint">
+              Drag Coal here. Drop Ice on the thermometer to cool. Empty fuel / overheat trips the lever.
+            </p>
           </section>
 
-          <section class="generator-col generator-col--grid" aria-label="Power grid">
-            <h3>Power Grid</h3>
+          <section class="generator-col generator-col--grid" aria-label="Energy use last hour">
+            <h3>Energy · last hour</h3>
             <div class="power-chart" aria-hidden="true">
               <div class="power-chart__scale">
                 <span>20</span>
                 <span>10</span>
                 <span>0</span>
               </div>
-              <svg id="generator-power-chart" class="power-chart__svg" viewBox="0 0 200 100" preserveAspectRatio="none">
-                <line class="power-chart__max" x1="0" y1="0" x2="200" y2="0"></line>
-                <polyline id="generator-power-line" class="power-chart__line" points=""></polyline>
-              </svg>
+              <div class="power-chart__plot">
+                <svg id="generator-power-chart" class="power-chart__svg" viewBox="0 0 200 100" preserveAspectRatio="none">
+                  <line class="power-chart__max" x1="0" y1="0" x2="200" y2="0"></line>
+                  <polyline id="generator-power-line" class="power-chart__line" points=""></polyline>
+                </svg>
+                <div class="power-chart__time">
+                  <span>1h ago</span>
+                  <span>now</span>
+                </div>
+              </div>
             </div>
-            <p id="generator-grid-load" class="power-chart__load">0 <small>/ 20</small></p>
-            <p id="generator-grid-summary" class="generator-grid-summary">Load stays at or under 20</p>
+            <p id="generator-grid-load" class="power-chart__load">0 <small>/ 20 now</small></p>
+            <p id="generator-hour-energy" class="power-chart__hour">Hour used: 0</p>
+            <p id="generator-grid-summary" class="generator-grid-summary">
+              Chart shows energy used each minute for the last hour (stay at or under 20)
+            </p>
           </section>
 
           <section class="smelter-col smelter-col--inv generator-col--inv" aria-label="Inventory" data-generator-drop="inv">
@@ -526,13 +714,13 @@
             </div>
             <p class="smelter-hint">
               Press <strong>E</strong> for hand + machine recipes, then click one to arrange.
-              Click the result to craft.
+              Shape must match or you get nothing — then click the result.
             </p>
           </section>
           <!-- Kept for script hooks; craftables live in the E recipes menu. -->
           <div id="player-inv-list" class="craft-list" hidden></div>
 
-          <section class="craft-station-col craft-station-col--eat" aria-label="Eat food">
+          <section class="craft-station-col craft-station-col--eat" aria-label="Eat and cool">
             <h3>Eat</h3>
             <div
               class="inv-eat"
@@ -545,13 +733,41 @@
               <span class="inv-eat__label">Drop food</span>
               <span class="inv-eat__hint">+10% · not at 90%+</span>
             </div>
-            <p class="smelter-hint">Drag Apple / Carrot here to eat. No right-click. Blocked at 90%+ food.</p>
+            <h3 class="craft-station-subhead">Cool</h3>
+            <div
+              class="inv-cool"
+              data-inv-cool
+              role="region"
+              aria-label="Cool — drop Ice here"
+              title="Drop Ice here to cool yourself for a while"
+            >
+              <span class="inv-cool__icon" aria-hidden="true">🧊</span>
+              <span class="inv-cool__label">Drop Ice</span>
+              <span class="inv-cool__hint">−10°C · 45 min</span>
+            </div>
+            <p class="smelter-hint">Food → Eat. Ice → Cool (or onto a generator thermometer).</p>
           </section>
 
-          <section class="craft-station-col craft-station-col--tools" aria-label="Tools">
-            <h3>Tools</h3>
-            <div id="player-tools-grid" class="smelter-grid craft-tools-grid"></div>
-            <p class="smelter-hint">Click a tool to equip it.</p>
+          <section class="craft-station-col craft-station-col--tools" aria-label="Equipment">
+            <h3>Equipment</h3>
+            <div
+              class="inv-equip"
+              data-inv-equip
+              role="region"
+              aria-label="Equipment — drop a tool here"
+              title="Drop a pick or sword here to equip it. Drag it back to inventory for Hand."
+            >
+              <button
+                type="button"
+                id="player-equip-slot"
+                class="smelter-slot inv-equip__slot is-empty"
+                data-equip-slot
+                draggable="false"
+                title="Equipment"
+              ></button>
+              <span class="inv-equip__label">Drop tool</span>
+            </div>
+            <p class="smelter-hint">Drag a tool from inventory into Equipment. Empty = Hand.</p>
           </section>
 
           <section class="craft-station-col craft-station-col--inv" aria-label="Inventory">
@@ -583,7 +799,7 @@
         aria-labelledby="craft-table-title"
       >
         <header class="smelter-panel__head">
-          <h2 id="craft-table-title">Crafting Table</h2>
+          <h2 id="craft-table-title">Workroom</h2>
           <button
             type="button"
             class="smelter-panel__close"
@@ -610,7 +826,7 @@
             </div>
             <p class="smelter-hint">
               Press <strong>E</strong> for hand + table + machine recipes, then click one to
-              arrange. Click the result to craft.
+              arrange. Wrong shape = no craft. Click the result when it appears.
             </p>
           </section>
           <div id="craft-table-list" class="craft-list" hidden></div>
@@ -630,6 +846,100 @@
                 <span class="inv-trash__label">Delete</span>
               </div>
             </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="kitchen-modal" class="smelter-modal craft-station-modal" hidden>
+      <div class="smelter-modal__backdrop" data-kitchen-close></div>
+      <div
+        class="smelter-panel craft-station-panel kitchen-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="kitchen-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="kitchen-title">Kitchen Pantry</h2>
+          <button
+            type="button"
+            class="smelter-panel__close"
+            data-kitchen-close
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </header>
+
+        <div class="craft-station-body craft-station-body--no-list craft-station-body--table kitchen-body">
+          <section class="craft-station-col craft-station-col--grid" aria-label="Kitchen food storage">
+            <h3>Food storage</h3>
+            <div
+              id="kitchen-storage-grid"
+              class="smelter-grid kitchen-grid"
+              aria-label="15 food slots"
+            ></div>
+            <p class="smelter-hint">
+              Food only — <strong>15</strong> slots, up to <strong>50</strong> each. Click or drag
+              to store / take.
+            </p>
+          </section>
+
+          <section
+            class="craft-station-col craft-station-col--inv"
+            aria-label="Inventory"
+            data-kitchen-drop="inv"
+          >
+            <h3>Inventory</h3>
+            <div id="kitchen-inv-grid" class="smelter-grid craft-inv-grid"></div>
+            <p class="smelter-hint">Click or drag Apple / Carrot into the pantry.</p>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="storage-modal" class="smelter-modal craft-station-modal" hidden>
+      <div class="smelter-modal__backdrop" data-storage-close></div>
+      <div
+        class="smelter-panel craft-station-panel storage-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="storage-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="storage-title">Storage Room</h2>
+          <button
+            type="button"
+            class="smelter-panel__close"
+            data-storage-close
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </header>
+
+        <div class="craft-station-body craft-station-body--no-list craft-station-body--table kitchen-body">
+          <section class="craft-station-col craft-station-col--grid" aria-label="Item storage">
+            <h3>Item crates</h3>
+            <div
+              id="storage-chest-grid"
+              class="smelter-grid kitchen-grid"
+              aria-label="15 item slots"
+            ></div>
+            <p class="smelter-hint">
+              Non-food only — <strong>15</strong> slots, up to <strong>50</strong> each. No Base
+              Key. Click or drag to store / take.
+            </p>
+          </section>
+
+          <section
+            class="craft-station-col craft-station-col--inv"
+            aria-label="Inventory"
+            data-storage-drop="inv"
+          >
+            <h3>Inventory</h3>
+            <div id="storage-inv-grid" class="smelter-grid craft-inv-grid"></div>
+            <p class="smelter-hint">Click or drag materials / tools here. Food stays in the kitchen.</p>
           </section>
         </div>
       </div>
@@ -713,6 +1023,239 @@
       </div>
     </div>
 
+    <div id="tv-modal" class="smelter-modal tv-modal" hidden>
+      <div class="smelter-modal__backdrop" data-tv="off"></div>
+      <!-- Escaped 6-7 swarm lives on the full screen (outside the TV panel). -->
+      <div id="tv-six-seven-screen" class="tv-six-seven-screen" hidden aria-hidden="true"></div>
+      <!-- Finale: cursed 6-7 blacks out the whole view. -->
+      <div id="tv-six-seven-blackout" class="tv-six-seven-blackout" hidden aria-hidden="true">
+        <div class="tv-six-seven-blackout__void" aria-hidden="true"></div>
+        <div class="tv-six-seven-blackout__glyphs" aria-hidden="true">
+          <span>6-7</span><span>6-7</span><span>6-7</span><span>6-7</span>
+          <span>6-7</span><span>6-7</span><span>6-7</span><span>6-7</span>
+        </div>
+        <div class="tv-six-seven tv-six-seven--cursed tv-six-seven--blackout-main" aria-hidden="true">
+          <span class="tv-six-seven__six">6</span>
+          <span class="tv-six-seven__dash">-</span>
+          <span class="tv-six-seven__seven">7</span>
+        </div>
+        <div
+          id="tv-six-seven-blackout-cursed"
+          class="tv-six-seven-blackout__cursed-swarm"
+          hidden
+          aria-hidden="true"
+        ></div>
+        <div
+          id="tv-six-seven-blackout-eyes"
+          class="tv-six-seven-blackout__eyes"
+          hidden
+          aria-hidden="true"
+        >
+          <span class="tv-six-seven-blackout__eye tv-six-seven-blackout__eye--left" aria-hidden="true"></span>
+          <span class="tv-six-seven-blackout__eye tv-six-seven-blackout__eye--right" aria-hidden="true"></span>
+        </div>
+        <p id="tv-six-seven-blackout-line" class="tv-six-seven-blackout__line" hidden aria-hidden="true"></p>
+      </div>
+      <div
+        class="smelter-panel tv-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tv-title"
+      >
+        <header class="smelter-panel__head tv-panel__head">
+          <h2 id="tv-title">Living Room TV</h2>
+          <button type="button" class="smelter-close" data-tv="off" aria-label="Leave TV">
+            ✕
+          </button>
+        </header>
+        <div id="tv-setup" class="tv-setup">
+          <p class="smelter-hint pause-hint tv-setup__hint">
+            Set loops (0 = no loops, max 20). Twist the middle speed dial (×1–×1024). Drag the two
+            levers on the channel rail — first lever on a line starts there; last lever sits one
+            line past your final channel (line 2→CH 2, line 6→CH 5). Exact CH 6–7 keeps your loops,
+            plays the full CH 1–8 lineup as 6-7, and goes wild at max.
+          </p>
+          <div id="tv-six-seven-stage" class="tv-six-seven-stage" hidden aria-hidden="true">
+            <div class="tv-six-seven-wing tv-six-seven-wing--left" id="tv-six-seven-left" aria-hidden="true"></div>
+            <div
+              id="tv-six-seven"
+              class="tv-six-seven tv-six-seven--main"
+            >
+              <span class="tv-six-seven__six">6</span>
+              <span class="tv-six-seven__dash">-</span>
+              <span class="tv-six-seven__seven">7</span>
+            </div>
+            <div class="tv-six-seven-wing tv-six-seven-wing--right" id="tv-six-seven-right" aria-hidden="true"></div>
+          </div>
+          <div class="tv-setup__row">
+            <div class="tv-setup__block tv-setup__block--loops">
+              <span class="tv-setup__block-title">Loops</span>
+              <div class="tv-setup__picker" role="group" aria-label="Loop count">
+                <button type="button" class="tv-set__btn tv-setup__step" data-tv="loops-down" aria-label="Fewer loops">
+                  −
+                </button>
+                <div class="tv-setup__value">
+                  <span id="tv-loops-value" class="tv-setup__count">0</span>
+                  <span id="tv-loops-label" class="tv-setup__label">no loops</span>
+                </div>
+                <button type="button" class="tv-set__btn tv-setup__step" data-tv="loops-up" aria-label="More loops">
+                  +
+                </button>
+              </div>
+              <span id="tv-forbidden-cipher" class="tv-forbidden__cipher" aria-hidden="true">
+                12 - 5 - 3 - 2
+              </span>
+            </div>
+            <div class="tv-setup__block tv-setup__block--speed">
+              <span class="tv-setup__block-title">Speed</span>
+              <div
+                class="tv-speed-dial__face"
+                id="tv-speed-dial-face"
+                role="slider"
+                tabindex="0"
+                aria-label="Speed dial"
+                aria-valuemin="1"
+                aria-valuemax="1024"
+                aria-valuenow="1"
+                aria-valuetext="1 times speed"
+              >
+                <div class="tv-speed-dial__ring" aria-hidden="true"></div>
+                <div class="tv-speed-dial__needle" id="tv-speed-dial-needle" aria-hidden="true"></div>
+                <div class="tv-speed-dial__hub">
+                  <span id="tv-speed-value" class="tv-speed-dial__value">×1</span>
+                </div>
+              </div>
+            </div>
+            <div class="tv-setup__block tv-setup__block--channels">
+              <div class="tv-setup__block-head">
+                <span class="tv-setup__block-title">Channels</span>
+                <span id="tv-range-readout" class="tv-setup__range-readout">CH 1–8</span>
+              </div>
+              <div
+                class="tv-ch-rail"
+                id="tv-ch-rail"
+                role="group"
+                aria-label="Channel range levers"
+              >
+                <div class="tv-ch-rail__track" id="tv-ch-rail-track">
+                  <div class="tv-ch-rail__channels" id="tv-ch-rail-channels"></div>
+                  <div class="tv-ch-rail__lines" id="tv-ch-rail-lines"></div>
+                  <button
+                    type="button"
+                    class="tv-ch-rail__lever tv-ch-rail__lever--first"
+                    id="tv-lever-first"
+                    data-tv-lever="first"
+                    aria-label="First channel lever"
+                  >
+                    <span class="tv-ch-rail__lever-knob">F</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="tv-ch-rail__lever tv-ch-rail__lever--last"
+                    id="tv-lever-last"
+                    data-tv-lever="last"
+                    aria-label="Last channel lever"
+                  >
+                    <span class="tv-ch-rail__lever-knob">L</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="pause-actions tv-setup__actions">
+            <button type="button" class="pause-btn pause-btn--resume" data-tv="watch">
+              Watch
+            </button>
+            <div id="tv-forbidden" class="tv-forbidden" aria-hidden="true">
+              <div class="tv-forbidden__hatch" id="tv-forbidden-hatch">
+                <div class="tv-forbidden__door tv-forbidden__door--left" aria-hidden="true"></div>
+                <div class="tv-forbidden__door tv-forbidden__door--right" aria-hidden="true"></div>
+                <div class="tv-forbidden__plate">
+                  <div class="tv-forbidden__tape" aria-hidden="true"></div>
+                  <button
+                    type="button"
+                    class="tv-forbidden__btn"
+                    id="tv-forbidden-btn"
+                    data-tv="forbidden"
+                    tabindex="-1"
+                    disabled
+                  >
+                    <span class="tv-forbidden__btn-label">Forbidden<br />channel</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="tv-six-seven-skip-wrap" class="tv-setup__skip-wrap" hidden>
+            <button type="button" class="pause-btn tv-setup__skip" data-tv="skip-arena">
+              Skip to 6-7 map
+            </button>
+          </div>
+        </div>
+        <div id="tv-watch" class="tv-set" hidden>
+          <div class="tv-set__bezel">
+            <div class="tv-set__screen" id="tv-screen">
+              <div class="tv-set__scan" aria-hidden="true"></div>
+              <div class="tv-set__meta">
+                <span id="tv-channel-label" class="tv-set__ch">CH 1/8</span>
+                <span id="tv-loop-label" class="tv-set__ch">No loops</span>
+                <span id="tv-show-name" class="tv-set__show">Factory News</span>
+              </div>
+              <div
+                id="tv-six-seven-watch"
+                class="tv-six-seven tv-six-seven--watch"
+                hidden
+                aria-hidden="true"
+              >
+                <span class="tv-six-seven__six">6</span>
+                <span class="tv-six-seven__dash">-</span>
+                <span class="tv-six-seven__seven">7</span>
+              </div>
+              <div
+                id="tv-six-seven-cursed"
+                class="tv-six-seven tv-six-seven--cursed"
+                hidden
+                aria-hidden="true"
+              >
+                <span class="tv-six-seven__six">6</span>
+                <span class="tv-six-seven__dash">-</span>
+                <span class="tv-six-seven__seven">7</span>
+              </div>
+              <div id="tv-frame" class="tv-set__frame" aria-hidden="true">📰</div>
+              <p id="tv-caption" class="tv-set__caption" role="status" aria-live="polite">
+                Morning news is warming up…
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="base-leave-modal" class="smelter-modal base-leave-modal" hidden>
+      <div class="smelter-modal__backdrop" data-base-leave="cancel"></div>
+      <div
+        class="smelter-panel pause-panel base-enter-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="base-leave-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="base-leave-title">Leave Base?</h2>
+        </header>
+        <p id="base-leave-hint" class="smelter-hint pause-hint">
+          Head back outside? Stay inside and you'll step back off the door.
+        </p>
+        <div class="pause-actions">
+          <button type="button" class="pause-btn pause-btn--resume" data-base-leave="leave">
+            Leave
+          </button>
+          <button type="button" class="pause-btn pause-btn--leave" data-base-leave="cancel">
+            Stay inside
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div id="build-modal" class="smelter-modal build-modal" hidden>
       <div class="smelter-modal__backdrop" data-build-close></div>
       <div
@@ -728,7 +1271,7 @@
           </button>
         </header>
         <p class="smelter-hint build-hint">
-          Pick any structure to enter build mode (or press <strong>1–7</strong>). Materials are
+          Pick any structure to enter build mode (or press <strong>1–6</strong>). Materials are
           spent when you place it. Tab / Q / F still work. Grass or depleted nodes — drills on
           nodes.
         </p>
@@ -762,10 +1305,6 @@
       </div>
     </div>
 
-    <footer class="site-credit">
-      This project is supported by the help of Maggoo
-    </footer>
-
     <!-- Mounted last on body (outside .app) so nothing can sit above it in paint order.
          Fixed + z-index 9999 + pointer-events auto on the button = reliable hit-testing. -->
     <div class="profile-chrome" id="profile-chrome">
@@ -782,12 +1321,94 @@
       </button>
     </div>
 
+    <!-- Main-menu only: wipe everything (top-right). -->
+    <div class="reset-chrome is-title-only" id="reset-chrome" hidden>
+      <button
+        type="button"
+        class="menu-reset-btn"
+        data-action="reset-all"
+        title="Reset everything"
+        aria-label="Reset everything"
+      >
+        Reset
+      </button>
+    </div>
+
+    <div id="reset-confirm-modal" class="smelter-modal reset-confirm-modal" hidden>
+      <div class="smelter-modal__backdrop" data-reset-confirm="cancel"></div>
+      <div
+        class="smelter-panel pause-panel base-enter-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reset-confirm-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="reset-confirm-title">Reset the game?</h2>
+        </header>
+        <p class="smelter-hint pause-hint">
+          This deletes all profiles, saves, settings, and mods on this device. You can’t undo it.
+        </p>
+        <div class="pause-actions">
+          <button type="button" class="pause-btn pause-btn--leave" data-reset-confirm="confirm">
+            Reset everything
+          </button>
+          <button type="button" class="pause-btn pause-btn--resume" data-reset-confirm="cancel">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="reset-mods-confirm-modal" class="smelter-modal reset-confirm-modal" hidden>
+      <div class="smelter-modal__backdrop" data-reset-mods-confirm="cancel"></div>
+      <div
+        class="smelter-panel pause-panel base-enter-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reset-mods-confirm-title"
+      >
+        <header class="smelter-panel__head">
+          <h2 id="reset-mods-confirm-title">Reset mods?</h2>
+        </header>
+        <p class="smelter-hint pause-hint">
+          This uninstalls every mod and locks hidden mods again (including 6-7). Your saves and
+          profiles stay. You can’t undo it.
+        </p>
+        <div class="pause-actions">
+          <button type="button" class="pause-btn pause-btn--leave" data-reset-mods-confirm="confirm">
+            Reset mods
+          </button>
+          <button type="button" class="pause-btn pause-btn--resume" data-reset-mods-confirm="cancel">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Full-viewport damage vignette (outside .app so nothing clips it). -->
     <div id="damage-flash" class="damage-flash" aria-hidden="true"></div>
 
-    <script src="js/data.js?v=20260804z" defer></script>
-    <script src="js/sfx.js?v=20260804z" defer></script>
-    <script src="js/game.js?v=20260804z" defer></script>
-    <script src="js/main.js?v=20260804z" defer></script>
-  </body>
+    <!-- Post–6-7 TV blackout: cursed swarm + 16×16 boss arena. -->
+    <div id="six-seven-arena" class="six-seven-arena" hidden aria-hidden="true">
+      <div class="six-seven-arena__void" aria-hidden="true"></div>
+      <div id="six-seven-arena-swarm" class="six-seven-arena__swarm" aria-hidden="true"></div>
+      <div class="six-seven-arena__stage">
+        <p id="six-seven-arena-hint" class="six-seven-arena__hint">The void thickens…</p>
+        <div
+          id="six-seven-arena-grid"
+          class="six-seven-arena__grid"
+          role="grid"
+          aria-label="6-7 arena"
+          hidden
+        ></div>
+      </div>
+      <div id="six-seven-arena-whiteout" class="six-seven-arena__whiteout" hidden aria-hidden="true"></div>
+    </div>
+
+    <script src="js/data.js?v=20260812u" defer></script>
+    <script src="js/sfx.js?v=20260812u" defer></script>
+    <script src="js/game.js?v=20260812u" defer></script>
+    <script src="js/main.js?v=20260812u" defer></script>
+  <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"a6d24ae9b9e349cc94bcb7dd3ded9822","r":1}' crossorigin="anonymous"></script>
+</body>
 </html>

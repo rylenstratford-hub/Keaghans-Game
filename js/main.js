@@ -9,6 +9,8 @@ const SCREENS = {
 
 const SETTINGS_KEY = "keaghans-game-settings";
 const PROFILES_KEY = "keaghans-game-profiles-v1";
+const SIX_SEVEN_MOD_KEY = "keaghans-game-six-seven-mod";
+const SIX_SEVEN_UNLOCK_KEY = "keaghans-game-six-seven-mod-unlocked";
 const MAX_PROFILES = 100;
 const NAME_MAX = 24;
 const SLOT_COUNT = window.IslandFoundry?.SLOT_COUNT ?? 5;
@@ -240,10 +242,24 @@ function renderProfileUi() {
   if (playHint) playHint.hidden = canPlay;
 
   const onPlay = SCREENS.play && !SCREENS.play.hidden;
+  const onTitle = SCREENS.title && !SCREENS.title.hidden;
   const showChrome = !onPlay;
+  document.body.classList.toggle("is-title-menu", onTitle);
   if (chrome) {
     chrome.classList.toggle("is-play-hidden", !showChrome);
     chrome.setAttribute("aria-hidden", String(!showChrome));
+  }
+  const resetChrome = document.getElementById("reset-chrome");
+  if (resetChrome) {
+    // Reset lives on the main menu only (top-right).
+    resetChrome.hidden = !onTitle;
+    resetChrome.setAttribute("aria-hidden", String(!onTitle));
+  }
+  const siteCredit = document.getElementById("site-credit");
+  if (siteCredit) {
+    // Updates + Maggoo credit — main menu only.
+    siteCredit.hidden = !onTitle;
+    siteCredit.setAttribute("aria-hidden", String(!onTitle));
   }
   if (entry) {
     entry.hidden = false;
@@ -302,6 +318,386 @@ function escapeHtml(text) {
     .replaceAll('"', "&quot;");
 }
 
+function isSixSevenModInstalled() {
+  try {
+    return localStorage.getItem(SIX_SEVEN_MOD_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function isSixSevenModUnlocked() {
+  try {
+    return localStorage.getItem(SIX_SEVEN_UNLOCK_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+const BRAND_DEFAULTS = {
+  eyebrow: "Craft · Automate · Explore",
+  title: "Satisfactory-Craft",
+  tagline: "Click to gather. Craft to grow. Build a factory that runs itself.",
+};
+
+/** Every non-whitespace token → 6-7 (keeps spacing / punctuation gaps). */
+function sixSevenizeText(text) {
+  if (text == null) return text;
+  const s = String(text);
+  if (!s.trim()) return s;
+  return s.replace(/\S+/g, "6-7");
+}
+
+const SIX_SEVEN_TEXT_ATTRS = ["aria-label", "title", "placeholder", "alt", "aria-valuetext"];
+const sixSevenTextNodeOriginals = new WeakMap();
+const sixSevenAttrOriginals = new WeakMap();
+let sixSevenTextObserver = null;
+let sixSevenTextApplying = false;
+
+function sixSevenSkipTextNode(node) {
+  const el = node.parentElement;
+  if (!el) return true;
+  if (el.closest("script, style, noscript, template, code")) return true;
+  if (el.closest("input, textarea, [contenteditable='true']")) return true;
+  if (el.closest("[data-six-seven-skip]")) return true;
+  return false;
+}
+
+function sixSevenRememberAttr(el, attr, value) {
+  let map = sixSevenAttrOriginals.get(el);
+  if (!map) {
+    map = new Map();
+    sixSevenAttrOriginals.set(el, map);
+  }
+  if (!map.has(attr)) map.set(attr, value);
+  return map.get(attr);
+}
+
+function sixSevenApplyTextNode(node, on) {
+  if (!node || node.nodeType !== Node.TEXT_NODE || sixSevenSkipTextNode(node)) return;
+  const current = node.nodeValue ?? "";
+  if (!current.trim()) return;
+
+  let orig = sixSevenTextNodeOriginals.get(node);
+  if (orig == null) {
+    orig = current;
+    sixSevenTextNodeOriginals.set(node, orig);
+  } else {
+    const cursed = sixSevenizeText(orig);
+    // Live UI rewrote this node with fresh copy — adopt it as the new original.
+    if (current !== orig && current !== cursed) {
+      orig = current;
+      sixSevenTextNodeOriginals.set(node, orig);
+    }
+  }
+
+  const next = on ? sixSevenizeText(orig) : orig;
+  if (node.nodeValue !== next) node.nodeValue = next;
+}
+
+function sixSevenApplyElementAttrs(el, on) {
+  if (!(el instanceof Element)) return;
+  if (el.closest("script, style, noscript, template, code")) return;
+  if (el.closest("[data-six-seven-skip]")) return;
+
+  for (const attr of SIX_SEVEN_TEXT_ATTRS) {
+    if (!el.hasAttribute(attr)) continue;
+    const current = el.getAttribute(attr) ?? "";
+    if (!current.trim()) continue;
+    let orig = sixSevenRememberAttr(el, attr, current);
+    const map = sixSevenAttrOriginals.get(el);
+    const cursed = sixSevenizeText(orig);
+    if (current !== orig && current !== cursed) {
+      map.set(attr, current);
+      orig = current;
+    }
+    const next = on ? sixSevenizeText(orig) : orig;
+    if (current !== next) el.setAttribute(attr, next);
+  }
+}
+
+function sixSevenWalk(root, on) {
+  if (!root) return;
+  const owned = !sixSevenTextApplying;
+  if (owned) sixSevenTextApplying = true;
+  try {
+    if (root.nodeType === Node.TEXT_NODE) {
+      sixSevenApplyTextNode(root, on);
+      return;
+    }
+    if (root.nodeType === Node.ELEMENT_NODE) {
+      sixSevenApplyElementAttrs(root, on);
+    }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      sixSevenApplyTextNode(node, on);
+      node = walker.nextNode();
+    }
+    if (root.querySelectorAll) {
+      root.querySelectorAll(SIX_SEVEN_TEXT_ATTRS.map((a) => `[${a}]`).join(",")).forEach((el) => {
+        sixSevenApplyElementAttrs(el, on);
+      });
+    }
+  } finally {
+    if (owned) sixSevenTextApplying = false;
+  }
+}
+
+function stopSixSevenTextWatcher() {
+  if (sixSevenTextObserver) {
+    sixSevenTextObserver.disconnect();
+    sixSevenTextObserver = null;
+  }
+}
+
+function startSixSevenTextWatcher() {
+  stopSixSevenTextWatcher();
+  sixSevenTextObserver = new MutationObserver((records) => {
+    if (sixSevenTextApplying || !isSixSevenModInstalled()) return;
+    sixSevenTextApplying = true;
+    try {
+      for (const rec of records) {
+        if (rec.type === "characterData" && rec.target) {
+          sixSevenApplyTextNode(rec.target, true);
+        }
+        if (rec.type === "attributes" && rec.target && rec.attributeName) {
+          if (SIX_SEVEN_TEXT_ATTRS.includes(rec.attributeName)) {
+            sixSevenApplyElementAttrs(rec.target, true);
+          }
+        }
+        if (rec.type === "childList") {
+          rec.addedNodes.forEach((n) => sixSevenWalk(n, true));
+        }
+      }
+    } finally {
+      sixSevenTextApplying = false;
+    }
+  });
+  sixSevenTextObserver.observe(document.documentElement, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: SIX_SEVEN_TEXT_ATTRS,
+  });
+}
+
+/** Install / remove the “every word is 6-7” pass over the whole page. */
+function syncSixSevenWordRewrite(on) {
+  if (on) {
+    sixSevenWalk(document.body, true);
+    document.title = "6-7";
+    startSixSevenTextWatcher();
+  } else {
+    stopSixSevenTextWatcher();
+    sixSevenWalk(document.body, false);
+    document.title = "Satisfactory-Craft";
+  }
+}
+
+function unlockSixSevenMod() {
+  try {
+    localStorage.setItem(SIX_SEVEN_UNLOCK_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+function installSixSevenMod() {
+  try {
+    localStorage.setItem(SIX_SEVEN_MOD_KEY, "1");
+    localStorage.setItem(SIX_SEVEN_UNLOCK_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+  applySixSevenModPresentation();
+}
+
+/** Only way to revert 6-7: remove it from Installed mods (stays unlocked). */
+function uninstallSixSevenMod() {
+  try {
+    localStorage.removeItem(SIX_SEVEN_MOD_KEY);
+  } catch {
+    /* ignore */
+  }
+  applySixSevenModPresentation();
+}
+
+function showResetConfirmModal() {
+  const modal = document.getElementById("reset-confirm-modal");
+  if (!modal) return;
+  modal.hidden = false;
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function hideResetConfirmModal() {
+  const modal = document.getElementById("reset-confirm-modal");
+  if (!modal) return;
+  modal.hidden = true;
+  modal.setAttribute("aria-hidden", "true");
+}
+
+function showResetModsConfirmModal() {
+  const modal = document.getElementById("reset-mods-confirm-modal");
+  if (!modal) return;
+  modal.hidden = false;
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function hideResetModsConfirmModal() {
+  const modal = document.getElementById("reset-mods-confirm-modal");
+  if (!modal) return;
+  modal.hidden = true;
+  modal.setAttribute("aria-hidden", "true");
+}
+
+/** Ask first — only wipe after the player confirms. */
+function promptResetEverything() {
+  showResetConfirmModal();
+}
+
+/** Ask before wiping install + unlock flags for every mod. */
+function promptResetMods() {
+  showResetModsConfirmModal();
+}
+
+/** Uninstall mods and re-lock hidden unlocks. Saves/profiles stay. */
+function resetMods() {
+  hideResetModsConfirmModal();
+  try {
+    localStorage.removeItem(SIX_SEVEN_MOD_KEY);
+    localStorage.removeItem(SIX_SEVEN_UNLOCK_KEY);
+  } catch {
+    /* ignore */
+  }
+  applySixSevenModPresentation();
+}
+
+/** Wipe profiles, saves, settings, and mod flags — full clean slate. */
+function resetEverything() {
+  hideResetConfirmModal();
+  if (gameMounted) {
+    window.IslandFoundry?.unmount?.();
+    gameMounted = false;
+  }
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith("keaghans-game")) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch {
+    try {
+      localStorage.removeItem(SETTINGS_KEY);
+      localStorage.removeItem(PROFILES_KEY);
+      localStorage.removeItem(SIX_SEVEN_MOD_KEY);
+      localStorage.removeItem(SIX_SEVEN_UNLOCK_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
+  activeSlot = 1;
+  applySixSevenModPresentation();
+  renderProfileUi();
+  showScreen("title");
+}
+
+/** Refresh Installed / Available columns on the Mods screen. */
+function renderModLists() {
+  const installed = document.getElementById("mod-installed-list");
+  const available = document.getElementById("mod-available-list");
+  const modTitle = document.getElementById("mod-panel-title");
+  const modCopy = document.getElementById("mod-panel-copy");
+  if (!installed || !available) return;
+
+  const sixSevenOn = isSixSevenModInstalled();
+  const sixSevenUnlocked = isSixSevenModUnlocked();
+
+  if (modTitle) modTitle.textContent = "Mods";
+  if (modCopy) {
+    modCopy.textContent =
+      "Installed on the left, available on the right. Remove from Installed to revert. Hidden mods stay ??? until unlocked.";
+  }
+
+  if (sixSevenOn) {
+    installed.innerHTML = `
+      <li class="mod-card--six-seven">
+        <strong>6-7 Mod</strong>
+        <span class="mod-list__tag is-locked">Installed</span>
+        <p class="mod-card__note">Everything is 6-7. Exact CH 6–7 on the TV is unavailable. Remove to revert.</p>
+        <button type="button" class="mod-remove-btn" data-mod-remove="six-seven">
+          Remove
+        </button>
+      </li>
+    `;
+  } else {
+    installed.innerHTML = `<li class="mod-list__empty">No mods installed yet.</li>`;
+  }
+
+  const soon = [
+    ["Custom crafting recipes", "Soon"],
+    ["New machines &amp; belts", "Soon"],
+    ["Player-made islands", "Soon"],
+  ];
+  let availableHtml = soon
+    .map(
+      ([name, tag]) =>
+        `<li>${name} <span class="mod-list__tag">${tag}</span></li>`
+    )
+    .join("");
+
+  // 6-7: hidden ??? until unlocked; revealed (and installable) after unlock.
+  if (!sixSevenOn) {
+    if (sixSevenUnlocked) {
+      availableHtml += `
+        <li class="mod-card--six-seven">
+          <strong>6-7 Mod</strong>
+          <span class="mod-list__tag">Unlocked</span>
+          <p class="mod-card__note">Install to make everything 6-7 and lock exact CH 6–7 on the TV.</p>
+          <button type="button" class="mod-install-btn" data-mod-install="six-seven">
+            Install
+          </button>
+        </li>
+      `;
+    } else {
+      availableHtml += `
+        <li class="mod-card--six-seven">
+          <strong>???</strong>
+          <span class="mod-list__tag">Hidden</span>
+          <p class="mod-card__note">Something is waiting on channels 6–7…</p>
+        </li>
+      `;
+    }
+  }
+  available.innerHTML = availableHtml;
+}
+
+/** Title + Mod screens reflect 6-7 when installed; restore brand when removed. */
+function applySixSevenModPresentation() {
+  const on = isSixSevenModInstalled();
+  document.body.classList.toggle("is-six-seven-mod", on);
+
+  // When removing the mod, put canonical brand copy back before the restore walk.
+  if (!on) {
+    const eyebrow = document.querySelector(".brand__eyebrow");
+    const title = document.querySelector(".brand__title");
+    const tagline = document.querySelector(".brand__tagline");
+    if (eyebrow) eyebrow.textContent = BRAND_DEFAULTS.eyebrow;
+    if (title) title.textContent = BRAND_DEFAULTS.title;
+    if (tagline) tagline.textContent = BRAND_DEFAULTS.tagline;
+  }
+
+  if (window.IslandFoundry?.refreshAda) {
+    window.IslandFoundry.refreshAda();
+  }
+
+  renderModLists();
+  // Last: rewrite every visible word to 6-7 (or restore originals).
+  syncSixSevenWordRewrite(on);
+}
+
 function showScreen(name) {
   if ((name === "play" || name === "saves") && !getActiveProfile()) {
     setFormError("Create a profile name to play.");
@@ -328,12 +724,37 @@ function showScreen(name) {
   }
 
   renderProfileUi();
+  applySixSevenModPresentation();
 }
+
+window.KeaghanApp = {
+  isSixSevenModInstalled,
+  isSixSevenModUnlocked,
+  unlockSixSevenMod,
+  installSixSevenMod,
+  uninstallSixSevenMod,
+  promptResetEverything,
+  resetEverything,
+  promptResetMods,
+  resetMods,
+  sixSevenizeText,
+  /** Arena door escape: unlock + install, then title screen. */
+  finishSixSevenDoorEscape() {
+    unlockSixSevenMod();
+    installSixSevenMod();
+    showScreen("title");
+  },
+};
 
 function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    return raw ? JSON.parse(raw) : { volume: 70, showFps: false };
+    const defaults = { volume: 70, showFps: false };
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    // Drop retired ADA mute setting if present.
+    delete parsed.adaVoice;
+    return { ...defaults, ...parsed };
   } catch {
     return { volume: 70, showFps: false };
   }
@@ -455,6 +876,52 @@ function bindSaves() {
   });
 }
 
+function bindModUi() {
+  document.addEventListener("click", (event) => {
+    const removeBtn = event.target.closest("[data-mod-remove]");
+    if (removeBtn) {
+      const id = removeBtn.dataset.modRemove;
+      if (id === "six-seven") {
+        playMenuClick();
+        uninstallSixSevenMod();
+      }
+      return;
+    }
+    const installBtn = event.target.closest("[data-mod-install]");
+    if (installBtn) {
+      const id = installBtn.dataset.modInstall;
+      if (id === "six-seven" && isSixSevenModUnlocked()) {
+        playMenuClick();
+        installSixSevenMod();
+      }
+    }
+  });
+}
+
+function bindResetConfirmUi() {
+  const modal = document.getElementById("reset-confirm-modal");
+  if (modal) {
+    modal.addEventListener("click", (event) => {
+      const action = event.target.closest("[data-reset-confirm]")?.dataset.resetConfirm;
+      if (!action) return;
+      playMenuClick();
+      if (action === "confirm") resetEverything();
+      else hideResetConfirmModal();
+    });
+  }
+
+  const modsModal = document.getElementById("reset-mods-confirm-modal");
+  if (modsModal) {
+    modsModal.addEventListener("click", (event) => {
+      const action = event.target.closest("[data-reset-mods-confirm]")?.dataset.resetModsConfirm;
+      if (!action) return;
+      playMenuClick();
+      if (action === "confirm") resetMods();
+      else hideResetModsConfirmModal();
+    });
+  }
+}
+
 function bindActions() {
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-action]");
@@ -480,6 +947,16 @@ function bindActions() {
     }
     if (action === "mod") {
       showScreen("mod");
+      return;
+    }
+    if (action === "reset-all") {
+      playMenuClick();
+      promptResetEverything();
+      return;
+    }
+    if (action === "reset-mods") {
+      playMenuClick();
+      promptResetMods();
       return;
     }
     if (action === "profile") {
@@ -510,7 +987,10 @@ function bindActions() {
 bindSettings();
 bindProfiles();
 bindSaves();
+bindModUi();
+bindResetConfirmUi();
 bindActions();
+applySixSevenModPresentation();
 
 window.addEventListener("keaghan-leave-game", () => {
   playMenuClick();

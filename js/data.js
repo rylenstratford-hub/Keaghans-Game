@@ -17,6 +17,7 @@ window.GameData = {
     smelter: { id: "smelter", name: "Smelter", icon: "🔥", color: "#e29a3a" },
     gear: { id: "gear", name: "Gear", icon: "⚙️", color: "#9db0bf" },
     generator: { id: "generator", name: "Coal Generator", icon: "⚡", color: "#f0b429" },
+    fan: { id: "fan", name: "Fan", icon: "🌀", color: "#7ec8ff" },
     copperWire: {
       id: "copperWire",
       name: "Copper Wire",
@@ -42,6 +43,12 @@ window.GameData = {
       icon: "🏠",
       color: "#8a9bb0",
     },
+    baseKey: {
+      id: "baseKey",
+      name: "Base Key",
+      icon: "🔑",
+      color: "#e6c34a",
+    },
     apple: {
       id: "apple",
       name: "Apple",
@@ -56,6 +63,38 @@ window.GameData = {
       color: "#e67a2e",
       food: true,
     },
+    bucket: {
+      id: "bucket",
+      name: "Iron Bucket",
+      icon: "🪣",
+      color: "#9aa3ad",
+    },
+    waterBucket: {
+      id: "waterBucket",
+      name: "Water Bucket",
+      icon: "💧",
+      color: "#4aa8d8",
+    },
+    ice: {
+      id: "ice",
+      name: "Ice",
+      icon: "🧊",
+      color: "#7ec8ff",
+      coolant: true,
+    },
+  },
+
+  /** Ice (portable) + Fan (powered building) cooling. */
+  cooling: {
+    generatorDropC: 35,
+    playerDropC: 10,
+    playerMinutes: 45,
+    /** °C dropped on adjacent generators each fan tick while powered. */
+    fanGeneratorDropC: 3.2,
+    /** Felt °C drop while standing next to a powered Fan. */
+    fanPlayerDropC: 8,
+    /** In-game minutes for a placed Water Bucket beside a powered Fan to freeze. */
+    fanFreezeMinutes: 5,
   },
 
   /**
@@ -107,7 +146,12 @@ window.GameData = {
   },
 
   getItem(id) {
-    return this.items[id] || { id, name: id, icon: "?", color: "#888" };
+    const item = this.items[id] || { id, name: id, icon: "?", color: "#888" };
+    // 6-7 Mod: every item reads as 6-7 (cosmetic — ids/recipes unchanged).
+    if (typeof window !== "undefined" && window.KeaghanApp?.isSixSevenModInstalled?.()) {
+      return { ...item, name: "6-7", icon: "6-7" };
+    }
+    return item;
   },
 
   /**
@@ -120,12 +164,12 @@ window.GameData = {
       uses: "Craft Planks in Tab inventory. Can also fuel a Smelter.",
     },
     plank: {
-      how: "Craft from 1 Log in Tab inventory (2×2 pocket craft).",
-      uses: "Craft Sticks, build a Crafting Table (Q), and fuel a Smelter.",
+      how: "Craft from 1 Log in Tab inventory (2×2) — any single cell. Wrong extras block the craft.",
+      uses: "Craft Sticks, build a Base (Q), and fuel a Smelter.",
     },
     stick: {
-      how: "Craft from 2 Planks in Tab inventory.",
-      uses: "Used with Planks to craft a Wood Pick at a Crafting Table.",
+      how: "Craft from 2 Planks stacked vertically in Tab inventory (2×2).",
+      uses: "Used with Planks to craft a Wood Pick in the Base Workroom.",
     },
     stone: {
       how: "Mine Rock nodes (needs Wood Pick or better).",
@@ -145,55 +189,76 @@ window.GameData = {
     },
     ironIngot: {
       how: "Smelt Iron Ore in a Smelter with fuel (Log, Planks, or Coal).",
-      uses: "Craft Gears and Iron Picks; build Drills, Generators, and Power Poles (Q).",
+      uses: "Craft Gears, Iron Buckets, and Iron Picks; build Drills, Generators, Fans, and Power Poles (Q).",
     },
     copperIngot: {
       how: "Smelt Copper Ore in a Smelter with fuel (Log, Planks, or Coal).",
       uses: "Craft Copper Wire; build Drills and Coal Generators (Q).",
     },
     woodPick: {
-      how: "Craft at a Crafting Table from 3 Planks + 2 Sticks.",
-      uses: "Mine Rock and Coal. Required before stronger picks.",
+      how: "Workroom 3×3 pickaxe shape: 3 Planks across the top, Stick in the center, Stick under that.",
+      uses: "Drag onto Equipment in Tab. Mines Rock and Coal. Required before stronger picks.",
     },
     stonePick: {
-      how: "Craft at a Crafting Table from 8 Stone + 1 Wood Pick.",
-      uses: "Mine Iron and Copper ore. Upgrade path to Iron Pick.",
+      how: "Workroom 3×3: Wood Pick in the center, Stone in every other cell.",
+      uses: "Drag onto Equipment in Tab. Mines Iron and Copper ore. Upgrade path to Iron Pick.",
     },
     ironPick: {
-      how: "Craft at a Crafting Table from 8 Iron Ingots + 1 Stone Pick.",
-      uses: "Strongest pick — mines every resource node.",
+      how: "Workroom 3×3: Stone Pick in the center, Iron Ingots in every other cell.",
+      uses: "Drag onto Equipment in Tab. Strongest pick — mines every resource node.",
     },
     ironSword: {
-      how: "Craft at a Crafting Table from 2 Iron Ingots + 1 Stick (vertical sword shape).",
-      uses: "Equip in Tab → Tools. One-shots night monsters (fists only deal 1 of their 20 HP).",
+      how: "Workroom 3×3 vertical sword: Iron Ingot, Iron Ingot, Stick down one column.",
+      uses: "Drag onto Equipment in Tab inventory. One-shots night monsters (fists only deal 1 of their 20 HP).",
     },
     gear: {
-      how: "Craft at a Crafting Table from 2 Iron Ingots.",
+      how: "Workroom 3×3: 2 Iron Ingots side by side horizontally.",
       uses: "Build Drills (Q).",
     },
     copperWire: {
-      how: "Craft at a Crafting Table from 1 Copper Ingot.",
-      uses: "Craft Cable — place 2 Copper Wire side by side horizontally.",
+      how: "Workroom 3×3: 1 Copper Ingot in any single cell.",
+      uses: "Craft ingredient only — 2 Copper Wire side by side horizontally make 1 Cable. Not a Power Line.",
     },
     cable: {
-      how: "Craft at a Crafting Table: 2 Copper Wire in a horizontal row → 1 Cable.",
-      uses: "Place with Q as a Power Line to wire Generators (output) to Drills/Smelters (input). Crafting Tables have no power ports.",
+      how: "Workroom 3×3: 2 Copper Wire in a horizontal row → 1 Cable. Shape must match.",
+      uses: "Inventory item. Spend 1 Cable with Q to place a Power Line on the island. Copper Wire is not Cable.",
     },
-    craftingStation: {
-      how: "Build with Q using 4 Planks.",
-      uses: "3×3 crafting for advanced recipes (picks, gears, wire, Cable). No power connection.",
+    bucket: {
+      how: "Workroom 3×3 bucket shape: Iron Ingot, gap, Iron Ingot on top; Iron Ingot in the center.",
+      uses: "Empty pail — outside in rain or thunder, click empty ground to fill it (becomes a Water Bucket).",
+    },
+    waterBucket: {
+      how: "Fill an Iron Bucket outside during rain or thunder (click empty ground in your 3×3).",
+      uses: "Place it on the ground next to a powered Fan to freeze into Ice (empty bucket comes back), or condense 2 Water Buckets in the Workroom.",
+    },
+    ice: {
+      how: "Place a Water Bucket next to a powered Fan (freezes in a few minutes), or Workroom: 2 Water Buckets side by side → 1 Ice.",
+      uses: "Portable cool-down — drag onto a generator thermometer, or onto Cool in Tab. For steady cooling, build a Fan next to the generator.",
+    },
+    // Guide-only: placed building (same machine id "cable" in the world).
+    powerLine: {
+      how: "Build with Q (Power Line) — costs 1 Cable from your inventory.",
+      uses: "Connects Generators (output) to Drills/Smelters (input), often with Power Poles. Different from the Cable item you craft.",
     },
     base: {
       how: "Build with Q using 50 Planks (5×3, click top-left). Upgrade inside: 30 Stone → Stone Base, then 30 Iron Ingots → Iron Base.",
-      uses: "Safe yard — monsters can't enter. Stand on it and left-click to enter a 10×10 indoor map (kitchen NW, upgrade north, living NE, storage SW, bedroom SE, hall elsewhere, doors east). Click the bedroom at night to sleep until 6:00 a.m.",
+      uses: "Safe yard — monsters can't enter. Walk onto it to be asked inside (Stay outside steps you back). 10×10 indoor map: kitchen NW (click to store food — 15 slots × 50), upgrade north, living NE (click to watch TV — set loops, channels advance on their own), workroom west (click for 3×3 crafting), storage SW (click to store non-food — 15×50, not the Base Key), bedroom SE, hall elsewhere, doors east. Room doors toggle with the Base Key from the south-hall hook. Click the bedroom at night to sleep until 6:00 a.m.",
+    },
+    baseKey: {
+      how: "Hangs on the key hook in the south indoor hall (🔑). Stand next to it and click to take or hang it. You must hang it back before leaving.",
+      uses: "Click a 1-tile room door to toggle it locked/unlocked. Hang it back on the south-hall hook before leaving — you can't take it outside. The 2-tile front doors don't use the key.",
     },
     smelter: {
       how: "Build with Q using 8 Stone + 2 Coal.",
-      uses: "Smelt ores into ingots. Burns Log, Planks, or Coal for heat.",
+      uses: "Smelt ores into ingots. Wire it to a Coal Generator for electric heat, or burn Log / Planks / Coal in the fuel slot when there's no power.",
     },
     generator: {
       how: "Build with Q using Iron Ingots, Copper Ingots, Stone, and Coal.",
-      uses: "Burns Coal to make power for Drills (connect with Power Lines / Power Poles).",
+      uses: "Burns Coal to power Drills, Smelters, and Fans (wire with Power Lines / Poles). Chart shows energy used each minute for the last hour. Temperature rises with load — place a powered Fan next to it to cool, or drop Ice on the thermometer. Overload / empty coal / overheat flips the switch to OFF — slide it up to ON to reset.",
+    },
+    fan: {
+      how: "Build with Q using 2 Iron Ingots + 1 Gear + 1 Copper Ingot.",
+      uses: "Needs power. Place next to a Coal Generator to keep it cool. Place a Water Bucket beside it to freeze Ice. Stand beside a running Fan to cool yourself too.",
     },
     powerPole: {
       how: "Build with Q using 1 Iron Ingot + 1 Cable.",
@@ -355,6 +420,36 @@ window.GameData = {
       // Two Copper Wire side-by-side horizontally → 1 Cable
       layout: ["copperWire", "copperWire", null, null, null, null, null, null, null],
     },
+    {
+      id: "bucket",
+      name: "Iron Bucket",
+      output: { id: "bucket", count: 1 },
+      cost: { ironIngot: 3 },
+      atStation: true,
+      // Bucket / V shape
+      layout: [
+        "ironIngot",
+        null,
+        "ironIngot",
+        null,
+        "ironIngot",
+        null,
+        null,
+        null,
+        null,
+      ],
+    },
+    {
+      id: "ice",
+      name: "Ice",
+      output: { id: "ice", count: 1 },
+      cost: { waterBucket: 2 },
+      // Empty buckets returned after condensing
+      returns: { bucket: 2 },
+      atStation: true,
+      // Condense: two Water Buckets side by side → Ice
+      layout: ["waterBucket", "waterBucket", null, null, null, null, null, null, null],
+    },
   ],
 
   /**
@@ -367,6 +462,7 @@ window.GameData = {
     smelter: { stone: 8, coal: 2 },
     drill: { ironIngot: 4, gear: 2, copperIngot: 2 },
     generator: { ironIngot: 5, copperIngot: 3, stone: 6, cable: 2 },
+    fan: { ironIngot: 2, gear: 1, copperIngot: 1 },
     powerPole: { ironIngot: 1, cable: 1 },
     // Explicit: only the Cable item. Never copperWire.
     cable: { cable: 1 },
@@ -417,19 +513,31 @@ window.GameData = {
     },
   },
 
+  /** Indoor kitchen pantry — food only. */
+  kitchen: {
+    slots: 15,
+    stackMax: 50,
+  },
+
+  /** Indoor storage room — non-food items (not the Base Key). */
+  storageRoom: {
+    slots: 15,
+    stackMax: 50,
+  },
+
   /** Buildings that consume grid power to operate. */
-  powerConsumers: ["drill"],
+  powerConsumers: ["drill", "smelter", "fan"],
 
   /**
    * Power network (Crafting Tables never join):
    * - Outputs supply power (generators)
-   * - Inputs draw power (drills; smelters sit on the grid for wiring)
+   * - Inputs draw power (drills, smelters, fans)
    * - Conductors (Power Lines, poles) bridge building ↔ building
    */
   powerOutputs: ["generator"],
-  powerInputs: ["drill", "smelter"],
+  powerInputs: ["drill", "smelter", "fan"],
   powerConductors: ["cable", "powerPole"],
-  powerNetwork: ["generator", "cable", "powerPole", "drill", "smelter"],
+  powerNetwork: ["generator", "cable", "powerPole", "drill", "smelter", "fan"],
 
   /** Chebyshev link range for network buildings (default 1 = adjacent). */
   powerLinkRange: {
@@ -438,6 +546,58 @@ window.GameData = {
     generator: 1,
     drill: 1,
     smelter: 1,
+    fan: 1,
+  },
+
+  /**
+   * ADA — Satisfactory-style helper. Lines play once per save (adaHeard).
+   * Keep voice short, dry, and pioneer-facing.
+   */
+  ada: {
+    name: "ADA",
+    controls:
+      "W A S D move · interact in your 3×3 · monsters 6:00 p.m.–6:00 a.m. · walk onto Base to enter · doors leave · ⬆ upgrade · Tab craft · drag tools onto Equipment · E recipes · Q build · 1–7 buildings · F demolish · Enter skips ADA voice · Esc menus then pause. Nodes regrow at 6:00 a.m.",
+    idle: "Standing by, pioneer. Habitat speakers carry my voice — stand on your Base or go inside. Press Enter to skip a line.",
+    lines: {
+      welcome:
+        "Pioneer. Island Foundry online. Gather resources and establish a foothold. Build a Base to connect my habitat speakers.",
+      firstLogs:
+        "Timber acquired. Process Logs into Planks in your Tab inventory.",
+      firstPlanks:
+        "Planks fabricated. Construction pathways unlocked — a Base requires fifty.",
+      firstBase:
+        "Habitat secured. Speakers online. Your Base is a safe yard — walk onto it when you're ready to go inside.",
+      enterBase:
+        "Interior systems online. You are on habitat speakers. Workroom for advanced crafts. Kitchen and Storage for supplies. Hang the Base Key before leaving.",
+      upgradeStone:
+        "Structural upgrade complete. Stone Base reinforced. Iron tier remains available.",
+      upgradeIron:
+        "Iron Base achieved. Maximum habitat tier. Impressive work, pioneer.",
+      woodPick:
+        "Wood Pick assembled in the Workroom. Harder nodes are now within reach.",
+      firstNight:
+        "Nightfall. Hostiles detected on the island. Stay sharp until dawn.",
+      firstSmelter:
+        "Smelter online. Load ore — burn fuel for heat, or wire it to a Coal Generator for electric heat.",
+      firstGenerator:
+        "Coal Generator placed. Wire power to Drills and Smelters with Poles and Power Lines. A Fan beside it keeps the core cool.",
+      firstFan:
+        "Fan online. Keep it powered beside hot machines — airflow is free insurance.",
+      firstBucket:
+        "Iron Bucket fabricated. Fill it outside in the rain — metal holds the water.",
+      firstWater:
+        "Bucket filled. Place it next to a powered Fan to freeze Ice — or condense two Water Buckets in the Workroom.",
+      firstFanIce:
+        "Fan freeze complete. Ice ready — empty bucket returned.",
+      firstIce:
+        "Ice condensed. Portable coolant — drop it on a hot generator or Cool in Tab.",
+      firstDrill:
+        "Drill receiving power. Automated extraction underway.",
+      firstWire:
+        "Copper Wire fabricated. Two in a row make Cable — then you can wire the grid.",
+      firstTv:
+        "Recreation online. Pick loops, then slide the two channel levers. First lever on a line starts there; last lever sits one line past the final channel. Dial in exactly six and seven and that counter doubles channel speed each step. Ice-Fans is for ice lovers and Fan lovers. Leave with the corner button, or it powers down after your last channel when wraps are done.",
+    },
   },
 
   goals: [
@@ -453,12 +613,12 @@ window.GameData = {
     },
     {
       id: "placeCraftStation",
-      text: "Build a Crafting Table (Q — 4 Planks)",
-      check: (s) => s.machines.some((m) => m.type === "craftingStation"),
+      text: "Build a Base (Q — 50 Planks)",
+      check: (s) => s.machines.some((m) => m.type === "base"),
     },
     {
       id: "craftPick",
-      text: "Craft a Wood Pick at a Crafting Table",
+      text: "Craft a Wood Pick in the Base Workroom",
       check: (s) => s.unlockedTools.includes("woodPick"),
     },
     {
@@ -469,7 +629,7 @@ window.GameData = {
     { id: "smeltIron", text: "Produce an Iron Ingot", check: (s) => (s.stats.smelted.ironIngot || 0) >= 1 },
     {
       id: "craftWire",
-      text: "Craft Copper Wire at a Crafting Table",
+      text: "Craft Copper Wire in the Base Workroom",
       check: (s) => (s.stats.crafted?.copperWire || 0) >= 1,
     },
     {
@@ -483,5 +643,27 @@ window.GameData = {
       check: (s) => (s.stats.poweredDrill || 0) >= 1,
     },
     { id: "automate", text: "Let a powered Drill gather 10 ore", check: (s) => (s.stats.drilled || 0) >= 10 },
+  ],
+
+  /**
+   * Secret discoveries. Unlock with unlockEasterEgg(id) — not auto-checked like goals.
+   * hint = locked chart text; text = unlocked description.
+   */
+  easterEggs: [
+    {
+      id: "sixSeven",
+      hint: "A strange dial pairing…",
+      text: "6-7 — tuned the living-room TV to channels 6–7",
+    },
+    {
+      id: "sixSevenMax",
+      hint: "When the dial goes full send…",
+      text: "6-7 MAX — max loops on 6–7 while pre-loading",
+    },
+    {
+      id: "forbiddenChannel",
+      hint: "Scratched into the living-room glass…",
+      text: "Forbidden channel — cracked the TV cipher (12 · 5 · 3 · 2)",
+    },
   ],
 };
