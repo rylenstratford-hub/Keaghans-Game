@@ -82,6 +82,12 @@ window.GameData = {
       color: "#7ec8ff",
       coolant: true,
     },
+    charcoal: {
+      id: "charcoal",
+      name: "Charcoal",
+      icon: "🌑",
+      color: "#2a2420",
+    },
   },
 
   /** Ice (portable) + Fan (powered building) cooling. */
@@ -161,7 +167,7 @@ window.GameData = {
   itemGuide: {
     log: {
       how: "Chop Trees on the island with your Hand (or any tool).",
-      uses: "Craft Planks in Tab inventory. Can also fuel a Smelter.",
+      uses: "Craft Planks in Tab inventory. Fuel a Smelter, or smelt a Log into Charcoal (5 minutes).",
     },
     plank: {
       how: "Craft from 1 Log in Tab inventory (2×2) — any single cell. Wrong extras block the craft.",
@@ -186,6 +192,10 @@ window.GameData = {
     copperOre: {
       how: "Mine Copper nodes (needs Stone Pick or better), or gather with a powered Drill.",
       uses: "Smelt into Copper Ingots in a Smelter (needs fuel).",
+    },
+    charcoal: {
+      how: "Smelt a Log in a Smelter — takes 5 in-game minutes (needs fuel or power).",
+      uses: "Seats in the living-room TV hatch after you crack the hidden cipher.",
     },
     ironIngot: {
       how: "Smelt Iron Ore in a Smelter with fuel (Log, Planks, or Coal).",
@@ -250,7 +260,7 @@ window.GameData = {
     },
     smelter: {
       how: "Build with Q using 8 Stone + 2 Coal.",
-      uses: "Smelt ores into ingots. Wire it to a Coal Generator for electric heat, or burn Log / Planks / Coal in the fuel slot when there's no power.",
+      uses: "Smelt ores into ingots, or a Log into Charcoal (5 minutes). Wire it to a Coal Generator for electric heat, or burn Log / Planks / Coal in the fuel slot when there's no power.",
     },
     generator: {
       how: "Build with Q using Iron Ingots, Copper Ingots, Stone, and Coal.",
@@ -497,6 +507,7 @@ window.GameData = {
   },
 
   smeltRecipes: [
+    { input: "log", output: "charcoal", minutes: 5 },
     { input: "ironOre", output: "ironIngot", minutes: 10 },
     { input: "copperOre", output: "copperIngot", minutes: 15 },
   ],
@@ -556,7 +567,7 @@ window.GameData = {
   ada: {
     name: "ADA",
     controls:
-      "W A S D move · interact in your 3×3 · monsters 6:00 p.m.–6:00 a.m. · walk onto Base to enter · doors leave · ⬆ upgrade · Tab craft · drag tools onto Equipment · E recipes · Q build · 1–7 buildings · F demolish · Enter skips ADA voice · Esc menus then pause. Nodes regrow at 6:00 a.m.",
+      "W A S D move · F1 player view (W/S walk, A/D turn) · interact in your 3×3 · monsters 6:00 p.m.–6:00 a.m. · walk onto Base to enter · doors leave · ⬆ upgrade · Tab craft · drag tools onto Equipment · E recipes · Q build · 1–7 buildings · F demolish · Enter skips ADA voice · Esc menus then pause. Nodes regrow at 6:00 a.m.",
     idle: "Standing by, pioneer. Habitat speakers carry my voice — stand on your Base or go inside. Press Enter to skip a line.",
     lines: {
       welcome:
@@ -663,7 +674,7 @@ window.GameData = {
     {
       id: "forbiddenChannel",
       hint: "Scratched into the living-room glass…",
-      text: "Forbidden channel — cracked the TV cipher (12 · 5 · 3 · 2)",
+      text: "Forbidden channel — cipher, charcoal, wires, keypad, then the last door",
     },
   ],
 };

@@ -375,6 +375,13 @@ window.IslandFoundry = (() => {
       stats: { gathered: {}, smelted: {}, crafted: {}, drilled: 0, poweredDrill: 0, manualSmelted: 0 },
       goalsDone: {},
       eggsDone: {},
+      tvForbidden: {
+        charcoal: false,
+        wires: false,
+        passcode: false,
+        wireRight: null,
+        wireDone: [false, false, false, false],
+      },
       toast: "",
       toastUntil: 0,
       startedAt: Date.now(),
@@ -416,7 +423,7 @@ window.IslandFoundry = (() => {
   }
 
   function defaultPlayerPos() {
-    return { x: Math.floor(COLS / 2), y: Math.floor(ROWS / 2) };
+    return { x: Math.floor(COLS / 2), y: Math.floor(ROWS / 2), facing: "s" };
   }
 
   function interiorSpawnPos() {
@@ -869,8 +876,28 @@ window.IslandFoundry = (() => {
     return true;
   }
 
+  function normalizeFacing(value) {
+    if (value === "n" || value === "s" || value === "e" || value === "w") return value;
+    return "s";
+  }
+
+  function facingFromStep(dx, dy) {
+    if (dx === 1) return "e";
+    if (dx === -1) return "w";
+    if (dy === 1) return "s";
+    if (dy === -1) return "n";
+    return null;
+  }
+
+  function setPlayerFacing(dx, dy) {
+    if (!state) return;
+    const next = facingFromStep(dx, dy);
+    if (next) state.player.facing = next;
+  }
+
   function normalizePlayer(gameState) {
     if (!gameState) return;
+    const facing = normalizeFacing(gameState.player?.facing);
     if (isInsideBase(gameState)) {
       const fallback = interiorSpawnPos();
       const raw = gameState.player;
@@ -879,6 +906,7 @@ window.IslandFoundry = (() => {
       gameState.player = {
         x: Math.max(0, Math.min(INTERIOR_COLS - 1, x)),
         y: Math.max(0, Math.min(INTERIOR_ROWS - 1, y)),
+        facing,
       };
       return;
     }
@@ -889,6 +917,7 @@ window.IslandFoundry = (() => {
     gameState.player = {
       x: Math.max(0, Math.min(COLS - 1, x)),
       y: Math.max(0, Math.min(ROWS - 1, y)),
+      facing,
     };
   }
 
@@ -1570,6 +1599,7 @@ window.IslandFoundry = (() => {
       };
       ensureBag(state);
       ensureEggsDone(state);
+      ensureTvForbidden(state);
       normalizeHunger(state);
       normalizeHealth(state);
       normalizeMonsters(state);
@@ -1622,6 +1652,7 @@ window.IslandFoundry = (() => {
     const { cols, rows } = activeMapSize(state);
     if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) return false;
     if (nx === prevX && ny === prevY) return false;
+    if (!fpvMode) setPlayerFacing(dx, dy);
     const dest = getActiveTile(state, nx, ny);
     if (!isWalkableTile(dest, state)) {
       const lockedDoor = isInsideBase(state) && isDoorLocked(dest);
@@ -1643,6 +1674,7 @@ window.IslandFoundry = (() => {
                 : "Can't walk there — only empty land"
       );
       renderHud();
+      if (fpvMode) renderFpv();
       return false;
     }
     // Outdoor hills: one-block steps only (steeper cliffs block).
@@ -1652,6 +1684,7 @@ window.IslandFoundry = (() => {
       if (step > 1) {
         setToast(state, "Too steep — find a gentler slope");
         renderHud();
+        if (fpvMode) renderFpv();
         return false;
       }
     }
@@ -2961,6 +2994,8 @@ window.IslandFoundry = (() => {
       window.KeaghanSfx?.setWeather?.(null);
       window.KeaghanSfx?.setWeatherMuffled?.(false);
       // Keep last wash colors — clearing background caused a black flash.
+      document.getElementById("sky-skyline")?.replaceChildren();
+      document.getElementById("sky-resources")?.replaceChildren();
       return;
     }
 
@@ -2980,6 +3015,8 @@ window.IslandFoundry = (() => {
       else sky.removeAttribute("data-weather");
     }
     sky.hidden = false;
+    syncSkySkyline();
+    syncSkyResources();
 
     if (atmo.dataset.skyPhase !== phase) atmo.dataset.skyPhase = phase;
     if ((atmo.dataset.weather || "") !== weather) {
@@ -2991,6 +3028,105 @@ window.IslandFoundry = (() => {
     // Indoors: keep the weather audible but muffled (walls dampen it).
     window.KeaghanSfx?.setWeather?.(weather || null);
     window.KeaghanSfx?.setWeatherMuffled?.(isInsideBase(state));
+  }
+
+  const SKYLINE_BUILDINGS = {
+    base: { kind: "base", h: 3.35 },
+    smelter: { kind: "smelter", h: 2.35 },
+    generator: { kind: "generator", h: 2.1 },
+    drill: { kind: "drill", h: 2.7 },
+    craftingStation: { kind: "craft", h: 1.85 },
+    powerPole: { kind: "pole", h: 2.85 },
+    fan: { kind: "fan", h: 1.45 },
+  };
+
+  function syncSkySkyline() {
+    const host = document.getElementById("sky-skyline");
+    if (!host) return;
+    if (!playActive || !state) {
+      host.replaceChildren();
+      return;
+    }
+    const buildings = (state.machines || []).filter((m) => SKYLINE_BUILDINGS[m?.type]);
+    buildings.sort((a, b) => {
+      if (a.type === "base" && b.type !== "base") return -1;
+      if (b.type === "base" && a.type !== "base") return 1;
+      return a.x - b.x || a.y - b.y;
+    });
+    const shown = buildings.slice(0, 16);
+    const mapW = Math.max(1, COLS - 1);
+    const mapH = Math.max(1, ROWS - 1);
+    host.replaceChildren();
+    shown.forEach((machine) => {
+      const spec = SKYLINE_BUILDINGS[machine.type];
+      const el = document.createElement("span");
+      el.className = `sky__building sky__building--${spec.kind}`;
+      const jitter = ((machine.x * 17 + machine.y * 31) % 9) - 4;
+      const left = 8 + (machine.x / mapW) * 80 + jitter * 0.28;
+      const depth = 1 - machine.y / mapH;
+      el.style.left = `${Math.max(4, Math.min(92, left))}%`;
+      el.style.bottom = `${depth * 10}%`;
+      el.style.setProperty("--sky-build-h", `${spec.h * (0.78 + (1 - depth) * 0.28)}rem`);
+      el.style.opacity = String(0.72 + (1 - depth) * 0.22);
+      host.appendChild(el);
+    });
+  }
+
+  const SKY_NODE_KINDS = {
+    tree: { kind: "tree", h: 4.2, lift: 22 },
+    rock: { kind: "rock", h: 1.05, lift: 10 },
+    coal: { kind: "ore coal", h: 0.92, lift: 11 },
+    iron: { kind: "ore iron", h: 0.92, lift: 11 },
+    copper: { kind: "ore copper", h: 0.92, lift: 11 },
+    carrot: { kind: "plant", h: 1.15, lift: 2 },
+  };
+
+  function syncSkyResources() {
+    const host = document.getElementById("sky-resources");
+    if (!host) return;
+    if (!playActive || !state) {
+      host.replaceChildren();
+      return;
+    }
+
+    const live = new Map();
+    for (const tile of state.tiles || []) {
+      if (!tile?.node || tile.hp <= 0) continue;
+      const spec = SKY_NODE_KINDS[tile.node];
+      if (!spec) continue;
+      live.set(`${tile.x},${tile.y}`, tile);
+    }
+
+    for (const el of [...host.children]) {
+      const key = el.dataset.key;
+      if (live.has(key)) {
+        el.classList.remove("is-gone");
+        live.delete(key);
+      } else if (!el.classList.contains("is-gone")) {
+        el.classList.add("is-gone");
+        window.setTimeout(() => {
+          if (el.classList.contains("is-gone") && el.parentNode === host) el.remove();
+        }, 580);
+      }
+    }
+
+    const mapW = Math.max(1, COLS - 1);
+    const mapH = Math.max(1, ROWS - 1);
+    for (const [key, tile] of live) {
+      const spec = SKY_NODE_KINDS[tile.node];
+      const el = document.createElement("span");
+      const kinds = spec.kind.split(" ").map((k) => `sky__node--${k}`).join(" ");
+      el.className = `sky__node ${kinds}`;
+      el.dataset.key = key;
+      const jitter = ((tile.x * 13 + tile.y * 29) % 7) - 3;
+      const left = 6 + (tile.x / mapW) * 86 + jitter * 0.35;
+      const depth = 1 - tile.y / mapH;
+      el.style.left = `${Math.max(3, Math.min(93, left))}%`;
+      el.style.bottom = `${spec.lift + depth * 14}%`;
+      el.style.setProperty("--sky-node-h", `${spec.h * (0.78 + (1 - depth) * 0.32)}rem`);
+      if (tile.node === "tree" && tile.x % 2 === 1) el.classList.add("is-flip");
+      host.appendChild(el);
+    }
   }
 
   function renderVitalsMeter(kind) {
@@ -4043,35 +4179,740 @@ window.IslandFoundry = (() => {
     );
   }
 
+  const TV_FORBIDDEN_PASS = "1637";
+  const TV_FORBIDDEN_WIRES = [
+    { id: "red", hex: "#d12626" },
+    { id: "blue", hex: "#2b7fff" },
+    { id: "yellow", hex: "#f0c400" },
+    { id: "pink", hex: "#e84aa8" },
+  ];
+  let tvForbiddenPass = "";
+  let tvWireDrag = null;
+  let tvForbiddenWiresBuilt = false;
+  let tvForbiddenFinaleActive = false;
+  let tvForbiddenFinaleTimer = null;
+  let tvForbiddenLockdownActive = false;
+  let tvForbiddenLockdownTimer = null;
+  let tvForbiddenLockdownWires = false;
+  let tvForbiddenLockdownSparks = false;
+  let tvForbiddenLockdownBroken = 0;
+  let tvForbiddenBriefingActive = false;
+  let tvForbiddenBriefingTimer = null;
+  let tvForbiddenBriefingLineTimers = [];
+  let tvForbiddenBriefingPausedBgm = false;
+  const TV_FORBIDDEN_BRIEFING_LINES = [
+    "This frequency was sealed.",
+    "Not because it is empty — because it is occupied.",
+    "The curse code is the pairing itself.",
+    "First lever: 6. Last lever: 7.",
+    "Exact 6–7. Nothing wider. Nothing else.",
+    "It was hidden so no pioneer would tune it.",
+    "Once it plays, it does not stop.",
+    "That is why it is kept secret.",
+    "No one is allowed.",
+    "and so don't do it.",
+  ];
+  const TV_FORBIDDEN_LOCKDOWN_CLASSES = [
+    "is-lockdown",
+    "is-lockdown-sirens",
+    "is-lockdown-twerk",
+    "is-lockdown-twerk-hold",
+    "is-lockdown-side-steam",
+    "is-lockdown-steam-slow",
+    "is-lockdown-descend",
+    "is-lockdown-slam-4",
+    "is-lockdown-code-drop",
+    "is-lockdown-slam-3",
+    "is-lockdown-wires-drop",
+    "is-lockdown-sparks",
+    "is-lockdown-slam-2",
+    "is-lockdown-slot-drop",
+  ];
+
+  function shuffleTvForbiddenWireOrder() {
+    const order = TV_FORBIDDEN_WIRES.map((_, i) => i);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = order[i];
+      order[i] = order[j];
+      order[j] = tmp;
+    }
+    if (order.every((v, i) => v === i)) {
+      const last = order.pop();
+      order.unshift(last);
+    }
+    return order;
+  }
+
+  function ensureTvForbidden(gameState) {
+    if (!gameState) return null;
+    if (!gameState.tvForbidden || typeof gameState.tvForbidden !== "object") {
+      gameState.tvForbidden = {};
+    }
+    const t = gameState.tvForbidden;
+    t.charcoal = Boolean(t.charcoal);
+    t.wires = Boolean(t.wires);
+    t.passcode = Boolean(t.passcode);
+    if (!Array.isArray(t.wireRight) || t.wireRight.length !== 4) {
+      t.wireRight = shuffleTvForbiddenWireOrder();
+    }
+    if (!Array.isArray(t.wireDone) || t.wireDone.length !== 4) {
+      t.wireDone = [false, false, false, false];
+    }
+    t.wireDone = t.wireDone.map((done) => Boolean(done));
+    if (t.wires) t.wireDone = [true, true, true, true];
+    return t;
+  }
+
+  function paintTvForbiddenCode() {
+    const readout = document.getElementById("tv-forbidden-code");
+    if (!readout) return;
+    const shown = tvForbiddenPass.padEnd(4, "•").split("").join(" ");
+    readout.textContent = shown;
+  }
+
+  function ensureTvForbiddenWires() {
+    const left = document.getElementById("tv-forbidden-wires-left");
+    const right = document.getElementById("tv-forbidden-wires-right");
+    if (!left || !right || !state) return;
+    const progress = ensureTvForbidden(state);
+    if (tvForbiddenWiresBuilt) return;
+    left.replaceChildren();
+    right.replaceChildren();
+    TV_FORBIDDEN_WIRES.forEach((wire, index) => {
+      const node = document.createElement("button");
+      node.type = "button";
+      node.className = "tv-forbidden__wire-node";
+      node.dataset.tvWire = "left";
+      node.dataset.tvWireIndex = String(index);
+      node.style.background = wire.hex;
+      node.style.color = wire.hex;
+      node.setAttribute("aria-label", `${wire.id} wire start`);
+      left.appendChild(node);
+    });
+    progress.wireRight.forEach((colorIndex, slot) => {
+      const wire = TV_FORBIDDEN_WIRES[colorIndex];
+      const node = document.createElement("button");
+      node.type = "button";
+      node.className = "tv-forbidden__wire-node";
+      node.dataset.tvWire = "right";
+      node.dataset.tvWireIndex = String(slot);
+      node.dataset.tvWireColor = String(colorIndex);
+      node.style.background = wire.hex;
+      node.style.color = wire.hex;
+      node.setAttribute("aria-label", `${wire.id} wire end`);
+      right.appendChild(node);
+    });
+    tvForbiddenWiresBuilt = true;
+  }
+
+  function tvForbiddenNodeCenter(node, svg) {
+    const nodeRect = node.getBoundingClientRect();
+    const svgRect = svg.getBoundingClientRect();
+    return {
+      x: nodeRect.left + nodeRect.width / 2 - svgRect.left,
+      y: nodeRect.top + nodeRect.height / 2 - svgRect.top,
+    };
+  }
+
+  function paintTvForbiddenWireLines(dragPoint) {
+    const svg = document.getElementById("tv-forbidden-wire-svg");
+    const leftCol = document.getElementById("tv-forbidden-wires-left");
+    const rightCol = document.getElementById("tv-forbidden-wires-right");
+    if (!svg || !leftCol || !rightCol || !state) return;
+    const progress = ensureTvForbidden(state);
+    const leftNodes = [...leftCol.querySelectorAll("[data-tv-wire='left']")];
+    const rightNodes = [...rightCol.querySelectorAll("[data-tv-wire='right']")];
+    svg.replaceChildren();
+    const ns = "http://www.w3.org/2000/svg";
+
+    leftNodes.forEach((node, index) => {
+      const connected = tvForbiddenLockdownWires || Boolean(progress.wireDone[index]);
+      const snapped = tvForbiddenLockdownWires && index < tvForbiddenLockdownBroken;
+      node.classList.toggle("is-done", connected && !snapped);
+      if (!connected) return;
+      const rightIndex = progress.wireRight.indexOf(index);
+      const end = rightNodes[rightIndex];
+      if (!end) return;
+      const a = tvForbiddenNodeCenter(node, svg);
+      const b = tvForbiddenNodeCenter(end, svg);
+      const mid = (a.x + b.x) / 2;
+      if (snapped) {
+        const left = document.createElementNS(ns, "path");
+        left.setAttribute("d", `M ${a.x} ${a.y} C ${(a.x + mid) / 2} ${a.y}, ${mid - 18} ${a.y}, ${mid - 22} ${(a.y + b.y) / 2}`);
+        left.setAttribute("fill", "none");
+        left.setAttribute("stroke", TV_FORBIDDEN_WIRES[index].hex);
+        left.setAttribute("stroke-width", "6");
+        left.setAttribute("stroke-linecap", "round");
+        left.setAttribute("opacity", "0.7");
+        svg.appendChild(left);
+        const right = document.createElementNS(ns, "path");
+        right.setAttribute("d", `M ${b.x} ${b.y} C ${(b.x + mid) / 2} ${b.y}, ${mid + 18} ${b.y}, ${mid + 22} ${(a.y + b.y) / 2}`);
+        right.setAttribute("fill", "none");
+        right.setAttribute("stroke", TV_FORBIDDEN_WIRES[index].hex);
+        right.setAttribute("stroke-width", "6");
+        right.setAttribute("stroke-linecap", "round");
+        right.setAttribute("opacity", "0.7");
+        svg.appendChild(right);
+        return;
+      }
+      const line = document.createElementNS(ns, "path");
+      line.setAttribute("d", `M ${a.x} ${a.y} C ${mid} ${a.y}, ${mid} ${b.y}, ${b.x} ${b.y}`);
+      line.setAttribute("fill", "none");
+      line.setAttribute("stroke", TV_FORBIDDEN_WIRES[index].hex);
+      line.setAttribute("stroke-width", "6");
+      line.setAttribute("stroke-linecap", "round");
+      svg.appendChild(line);
+    });
+
+    if (tvWireDrag && dragPoint && leftNodes[tvWireDrag.fromIndex]) {
+      const start = tvForbiddenNodeCenter(leftNodes[tvWireDrag.fromIndex], svg);
+      const line = document.createElementNS(ns, "path");
+      const mid = (start.x + dragPoint.x) / 2;
+      line.setAttribute(
+        "d",
+        `M ${start.x} ${start.y} C ${mid} ${start.y}, ${mid} ${dragPoint.y}, ${dragPoint.x} ${dragPoint.y}`
+      );
+      line.setAttribute("fill", "none");
+      line.setAttribute("stroke", TV_FORBIDDEN_WIRES[tvWireDrag.fromIndex].hex);
+      line.setAttribute("stroke-width", "6");
+      line.setAttribute("stroke-linecap", "round");
+      line.setAttribute("opacity", "0.85");
+      svg.appendChild(line);
+    }
+  }
+
   function syncTvForbiddenHatch() {
     const cabinet = document.getElementById("tv-forbidden");
     const cipher = document.getElementById("tv-forbidden-cipher");
     const btn = document.getElementById("tv-forbidden-btn");
+    const slot = document.getElementById("tv-forbidden-slot");
+    const slotWell = document.getElementById("tv-forbidden-slot-well");
+    const seated = document.getElementById("tv-forbidden-seated");
+    const seatedWell = document.getElementById("tv-forbidden-seated-well");
+    const wires = document.getElementById("tv-forbidden-wires");
     if (!cabinet) return;
 
+    const progress = state ? ensureTvForbidden(state) : null;
     const inSetup = openTvPrompt && tvPhase === "setup";
     const armed = inSetup && isTvForbiddenCodeArmed() && !isTvSixSevenLockdown();
+    const charcoal = Boolean(progress?.charcoal);
+    const wired = Boolean(progress?.wires);
+    const unlocked = Boolean(progress?.passcode);
     const wasOpen = cabinet.classList.contains("is-open");
 
     cabinet.classList.toggle("is-armed", armed);
     cabinet.classList.toggle("is-open", armed);
+    if (!tvForbiddenLockdownActive) {
+      cabinet.classList.toggle("is-charcoal", armed && charcoal);
+      cabinet.classList.toggle("is-wired", armed && wired);
+      if (!tvForbiddenFinaleActive) {
+        cabinet.classList.toggle("is-unlocked", armed && unlocked);
+        cabinet.classList.toggle("is-finale-lit", armed && unlocked);
+      }
+    }
     cabinet.setAttribute("aria-hidden", armed ? "false" : "true");
     cipher?.classList.toggle("is-armed", armed);
     cipher?.classList.toggle("is-open", armed);
 
     if (btn) {
-      btn.disabled = !armed;
-      btn.tabIndex = armed ? 0 : -1;
+      const ready =
+        armed &&
+        unlocked &&
+        cabinet.classList.contains("is-finale-lit") &&
+        !tvForbiddenLockdownActive &&
+        !tvForbiddenBriefingActive;
+      btn.disabled = !ready;
+      btn.tabIndex = ready ? 0 : -1;
     }
+    if (slot) {
+      slot.disabled = !(armed && !charcoal && !tvForbiddenLockdownActive);
+      slot.tabIndex = armed && !charcoal && !tvForbiddenLockdownActive ? 0 : -1;
+    }
+    if (slotWell) slotWell.textContent = charcoal ? "🌑" : "";
+    if (seated) {
+      const canTake =
+        armed &&
+        charcoal &&
+        unlocked &&
+        cabinet.classList.contains("is-finale-lit") &&
+        !tvForbiddenLockdownActive;
+      seated.disabled = !canTake;
+      seated.tabIndex = canTake ? 0 : -1;
+    }
+    if (seatedWell) seatedWell.textContent = charcoal ? "🌑" : "";
+    if (wires) {
+      if (tvForbiddenLockdownActive && (tvForbiddenLockdownWires || cabinet.classList.contains("is-lockdown-wires-drop"))) {
+        wires.hidden = false;
+        wires.removeAttribute("hidden");
+        ensureTvForbiddenWires();
+        paintTvForbiddenWireLines();
+      } else if (armed && charcoal && !wired) {
+        wires.hidden = false;
+        wires.removeAttribute("hidden");
+        ensureTvForbiddenWires();
+        paintTvForbiddenWireLines();
+      } else {
+        wires.hidden = true;
+        wires.setAttribute("hidden", "");
+      }
+    }
+    paintTvForbiddenCode();
 
-    if (armed && !wasOpen) {
+    if (armed && !wasOpen) window.KeaghanSfx?.playMenuClick?.();
+    if (!armed) {
+      cabinet.classList.remove(
+        "is-pressed",
+        "is-finale-crack",
+        "is-finale-hiss",
+        "is-finale-hiss-slow",
+        "is-finale-open",
+        "is-finale-open-left",
+        "is-finale-open-right",
+        "is-finale-rise",
+        "is-finale-lit",
+        ...TV_FORBIDDEN_LOCKDOWN_CLASSES
+      );
+      cipher?.classList.remove("is-pressed");
+      tvForbiddenPass = "";
+      tvWireDrag = null;
+      stopTvForbiddenFinale(false);
+      stopTvForbiddenLockdown(false);
+    }
+  }
+
+  function stopTvForbiddenFinale(keepLit) {
+    if (tvForbiddenFinaleTimer != null) {
+      window.clearTimeout(tvForbiddenFinaleTimer);
+      tvForbiddenFinaleTimer = null;
+    }
+    tvForbiddenFinaleActive = false;
+    if (!keepLit) return;
+    document.getElementById("tv-forbidden")?.classList.add("is-unlocked", "is-finale-lit");
+  }
+
+  function startTvForbiddenFinale() {
+    const cabinet = document.getElementById("tv-forbidden");
+    if (!cabinet) return;
+    stopTvForbiddenFinale(false);
+    tvForbiddenFinaleActive = true;
+    cabinet.classList.remove(
+      "is-unlocked",
+      "is-finale-lit",
+      "is-finale-open",
+      "is-finale-open-left",
+      "is-finale-open-right",
+      "is-finale-rise",
+      "is-finale-hiss-slow"
+    );
+    cabinet.classList.add("is-finale-crack", "is-finale-hiss");
+    window.KeaghanSfx?.playForbiddenSteam?.();
+    setToast(state, "The last door cracks — steam hisses out…");
+    renderHud();
+
+    tvForbiddenFinaleTimer = window.setTimeout(() => {
+      cabinet.classList.add("is-finale-hiss-slow");
+      window.KeaghanSfx?.playForbiddenSteamTail?.();
+      setToast(state, "The steam dies down…");
+      renderHud();
+      tvForbiddenFinaleTimer = window.setTimeout(() => {
+        cabinet.classList.add("is-finale-open-left");
+        cabinet.classList.remove("is-finale-hiss");
+        window.KeaghanSfx?.playForbiddenDoors?.();
+        setToast(state, "The left door pulls away…");
+        renderHud();
+        tvForbiddenFinaleTimer = window.setTimeout(() => {
+          cabinet.classList.add("is-finale-open-right");
+          window.KeaghanSfx?.playForbiddenDoors?.();
+          setToast(state, "The right door matches it…");
+          renderHud();
+          tvForbiddenFinaleTimer = window.setTimeout(() => {
+            cabinet.classList.add("is-finale-open", "is-finale-rise", "is-unlocked");
+            window.KeaghanSfx?.playForbiddenRise?.();
+            setToast(state, "The floor rises…");
+            renderHud();
+            tvForbiddenFinaleTimer = window.setTimeout(() => {
+              cabinet.classList.add("is-finale-lit");
+              tvForbiddenFinaleActive = false;
+              tvForbiddenFinaleTimer = null;
+              setToast(state, "Forbidden channel — open.");
+              window.KeaghanSfx?.playMenuClick?.();
+              syncTvForbiddenHatch();
+              renderHud();
+            }, 1200);
+          }, 2200);
+        }, 2200);
+      }, 1500);
+    }, 1300);
+  }
+
+  function stopTvForbiddenLockdown(keepVisual) {
+    if (tvForbiddenLockdownTimer != null) {
+      window.clearTimeout(tvForbiddenLockdownTimer);
+      tvForbiddenLockdownTimer = null;
+    }
+    tvForbiddenLockdownActive = false;
+    tvForbiddenLockdownWires = false;
+    tvForbiddenLockdownSparks = false;
+    tvForbiddenLockdownBroken = 0;
+    window.KeaghanSfx?.stopForbiddenSiren?.();
+    if (keepVisual) return;
+    document.getElementById("tv-forbidden")?.classList.remove(...TV_FORBIDDEN_LOCKDOWN_CLASSES);
+  }
+
+  function startTvForbiddenLockdown() {
+    const cabinet = document.getElementById("tv-forbidden");
+    if (!cabinet) return;
+    stopTvForbiddenLockdown(false);
+    tvForbiddenLockdownActive = true;
+    tvForbiddenLockdownWires = true;
+    tvForbiddenLockdownSparks = false;
+    tvForbiddenLockdownBroken = 0;
+    cabinet.classList.remove("is-finale-lit");
+    cabinet.classList.add(
+      "is-lockdown",
+      "is-open",
+      "is-charcoal",
+      "is-wired",
+      "is-unlocked",
+      "is-finale-open",
+      "is-finale-open-left",
+      "is-finale-open-right",
+      "is-finale-rise"
+    );
+    ensureTvForbiddenWires();
+    paintTvForbiddenWireLines();
+    window.KeaghanSfx?.startForbiddenSiren?.();
+    cabinet.classList.add("is-lockdown-sirens");
+    setToast(state, "Charcoal pulled — lockdown!");
+    renderHud();
+
+    const snapWire = () => {
+      tvForbiddenLockdownBroken += 1;
+      tvForbiddenLockdownSparks = true;
+      cabinet.classList.add("is-lockdown-sparks");
+      paintTvForbiddenWireLines();
+      window.KeaghanSfx?.playForbiddenSparks?.();
+    };
+
+    const finishLockdown = () => {
+      stopTvForbiddenLockdown(false);
+      cabinet.classList.remove(
+        "is-unlocked",
+        "is-finale-lit",
+        "is-finale-open",
+        "is-finale-open-left",
+        "is-finale-open-right",
+        "is-finale-rise",
+        "is-finale-crack",
+        "is-wired",
+        "is-charcoal"
+      );
+      if (state) {
+        const reset = ensureTvForbidden(state);
+        reset.wireRight = shuffleTvForbiddenWireOrder();
+        tvForbiddenWiresBuilt = false;
+      }
+      setToast(state, "Hatch reset — seat charcoal again.");
+      syncTvForbiddenHatch();
+      renderHud();
+    };
+
+    const steps = [
+      {
+        ms: 160,
+        fn() {
+          cabinet.classList.add("is-lockdown-twerk");
+          window.KeaghanSfx?.playForbiddenTwerk?.();
+        },
+      },
+      {
+        ms: 280,
+        fn() {
+          cabinet.classList.add("is-lockdown-side-steam");
+          window.KeaghanSfx?.playForbiddenSteam?.();
+        },
+      },
+      {
+        ms: 720,
+        fn() {
+          cabinet.classList.add("is-lockdown-twerk-hold", "is-lockdown-steam-slow");
+          window.KeaghanSfx?.playForbiddenSteamTail?.();
+          window.KeaghanSfx?.fadeForbiddenSiren?.();
+          window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+              cabinet.classList.add("is-lockdown-descend");
+              setToast(state, "The platform sinks…");
+              renderHud();
+            });
+          });
+        },
+      },
+      {
+        ms: 4600,
+        fn() {
+          cabinet.classList.add("is-lockdown-slam-4");
+          window.KeaghanSfx?.playForbiddenSlam?.();
+          setToast(state, "The last doors slam.");
+          renderHud();
+        },
+      },
+      {
+        ms: 280,
+        fn() {
+          cabinet.classList.add("is-lockdown-code-drop");
+          setToast(state, "The keypad lowers…");
+          renderHud();
+        },
+      },
+      {
+        ms: 4400,
+        fn() {
+          cabinet.classList.add("is-lockdown-slam-3");
+          window.KeaghanSfx?.playForbiddenSlam?.();
+          setToast(state, "The third doors slam.");
+          renderHud();
+        },
+      },
+      {
+        ms: 1400,
+        fn() {
+          const wires = document.getElementById("tv-forbidden-wires");
+          if (wires) {
+            wires.hidden = false;
+            wires.removeAttribute("hidden");
+          }
+          cabinet.classList.add("is-lockdown-wires-drop");
+          ensureTvForbiddenWires();
+          paintTvForbiddenWireLines();
+          setToast(state, "The wires lower…");
+          renderHud();
+        },
+      },
+      { ms: 5600, fn: snapWire },
+      { ms: 480, fn: snapWire },
+      { ms: 480, fn: snapWire },
+      { ms: 480, fn: snapWire },
+      {
+        ms: 420,
+        fn() {
+          cabinet.classList.add("is-lockdown-slam-2");
+          window.KeaghanSfx?.playForbiddenSlam?.();
+          setToast(state, "The second doors slam.");
+          renderHud();
+        },
+      },
+      {
+        ms: 380,
+        fn() {
+          cabinet.classList.add("is-lockdown-slot-drop");
+          setToast(state, "The charcoal slot lowers…");
+          renderHud();
+        },
+      },
+      { ms: 9200, fn: finishLockdown },
+    ];
+
+    let stepIndex = 0;
+    const runNext = () => {
+      if (!tvForbiddenLockdownActive || stepIndex >= steps.length) return;
+      const step = steps[stepIndex];
+      stepIndex += 1;
+      tvForbiddenLockdownTimer = window.setTimeout(() => {
+        step.fn();
+        runNext();
+      }, step.ms);
+    };
+    runNext();
+  }
+
+  function tryTakeTvForbiddenCharcoal() {
+    if (!state || !isTvForbiddenCodeArmed() || tvPhase !== "setup") return;
+    if (tvForbiddenFinaleActive || tvForbiddenLockdownActive || tvForbiddenBriefingActive) return;
+    const cabinet = document.getElementById("tv-forbidden");
+    if (!cabinet?.classList.contains("is-finale-lit")) return;
+    const progress = ensureTvForbidden(state);
+    if (!progress.charcoal || !progress.passcode) return;
+    addItem(state, "charcoal", 1);
+    progress.charcoal = false;
+    progress.wires = false;
+    progress.passcode = false;
+    progress.wireDone = [false, false, false, false];
+    tvForbiddenPass = "";
+    const seatedWell = document.getElementById("tv-forbidden-seated-well");
+    if (seatedWell) seatedWell.textContent = "";
+    saveState(state);
+    startTvForbiddenLockdown();
+  }
+
+  function setTvForbiddenBlackoutEyes(show) {
+    const eyes = document.getElementById("tv-forbidden-blackout-eyes");
+    if (!eyes) return;
+    eyes.hidden = !show;
+    if (show) {
+      eyes.removeAttribute("hidden");
+      eyes.setAttribute("aria-hidden", "false");
+      eyes.classList.add("is-on");
+    } else {
+      eyes.setAttribute("hidden", "");
+      eyes.setAttribute("aria-hidden", "true");
+      eyes.classList.remove("is-on");
+    }
+  }
+
+  function setTvForbiddenBlackoutLine(text) {
+    const line = document.getElementById("tv-forbidden-blackout-line");
+    if (!line) return;
+    if (text == null) {
+      line.hidden = true;
+      line.setAttribute("hidden", "");
+      line.classList.remove("is-on");
+      line.textContent = "";
+      return;
+    }
+    line.textContent = text;
+    line.hidden = false;
+    line.removeAttribute("hidden");
+    line.classList.remove("is-on");
+    void line.offsetWidth;
+    line.classList.add("is-on");
+  }
+
+  function stopTvForbiddenBriefing() {
+    if (tvForbiddenBriefingTimer != null) {
+      window.clearTimeout(tvForbiddenBriefingTimer);
+      tvForbiddenBriefingTimer = null;
+    }
+    for (const id of tvForbiddenBriefingLineTimers) window.clearTimeout(id);
+    tvForbiddenBriefingLineTimers = [];
+    tvForbiddenBriefingActive = false;
+    const overlay = document.getElementById("tv-forbidden-blackout");
+    overlay?.classList.remove("is-dimming", "is-blackout");
+    if (overlay) {
+      overlay.hidden = true;
+      overlay.setAttribute("hidden", "");
+      overlay.setAttribute("aria-hidden", "true");
+    }
+    setTvForbiddenBlackoutLine(null);
+    setTvForbiddenBlackoutEyes(false);
+    window.KeaghanSfx?.stopEtherealMusic?.();
+    window.KeaghanSfx?.stopOminousMusic?.();
+    if (tvForbiddenBriefingPausedBgm) {
+      tvForbiddenBriefingPausedBgm = false;
+      if (!gamePaused) window.KeaghanSfx?.resumeMusic?.();
+    }
+  }
+
+  function startTvForbiddenBriefing() {
+    const overlay = document.getElementById("tv-forbidden-blackout");
+    if (!overlay) return;
+    stopTvForbiddenBriefing();
+    tvForbiddenBriefingActive = true;
+    overlay.hidden = false;
+    overlay.removeAttribute("hidden");
+    overlay.setAttribute("aria-hidden", "false");
+    void overlay.offsetWidth;
+    overlay.classList.add("is-dimming");
+    setToast(state, "The room starts to go dark…");
+    renderHud();
+
+    tvForbiddenBriefingTimer = window.setTimeout(() => {
+      overlay.classList.add("is-blackout");
+      if (!tvForbiddenBriefingPausedBgm) {
+        tvForbiddenBriefingPausedBgm = true;
+        window.KeaghanSfx?.pauseMusic?.();
+      }
+      window.KeaghanSfx?.startEtherealMusic?.();
+      setToast(state, "");
+      renderHud();
+      TV_FORBIDDEN_BRIEFING_LINES.forEach((text, index) => {
+        const id = window.setTimeout(() => {
+          if (!tvForbiddenBriefingActive) return;
+          setTvForbiddenBlackoutLine(text);
+          setTvForbiddenBlackoutEyes(index === TV_FORBIDDEN_BRIEFING_LINES.length - 1);
+        }, index * 3200);
+        tvForbiddenBriefingLineTimers.push(id);
+      });
+      const doneAt = TV_FORBIDDEN_BRIEFING_LINES.length * 3200 + 5600;
+      tvForbiddenBriefingTimer = window.setTimeout(() => {
+        stopTvForbiddenBriefing();
+        setToast(state, "The hatch goes quiet again.");
+        renderHud();
+      }, doneAt);
+    }, 30000);
+  }
+
+  function trySeatTvForbiddenCharcoal() {
+    if (!state || !isTvForbiddenCodeArmed() || tvPhase !== "setup") return;
+    if (tvForbiddenLockdownActive || tvForbiddenFinaleActive || tvForbiddenBriefingActive) return;
+    const progress = ensureTvForbidden(state);
+    if (progress.charcoal) return;
+    if ((state.inventory.charcoal || 0) < 1) {
+      setToast(state, "Need charcoal — smelt a Log for 5 minutes.");
+      renderHud();
+      return;
+    }
+    removeItem(state, "charcoal", 1);
+    progress.charcoal = true;
+    setToast(state, "Charcoal seated — a second door releases.");
+    window.KeaghanSfx?.playMenuClick?.();
+    saveState(state);
+    syncTvForbiddenHatch();
+    renderHud();
+  }
+
+  function submitTvForbiddenPass() {
+    if (!state || !isTvForbiddenCodeArmed() || tvPhase !== "setup") return;
+    const progress = ensureTvForbidden(state);
+    if (!progress.wires || progress.passcode) return;
+    const lock = document.getElementById("tv-forbidden-lock");
+    if (tvForbiddenPass === TV_FORBIDDEN_PASS) {
+      progress.passcode = true;
+      tvForbiddenPass = "";
       unlockEasterEgg("forbiddenChannel");
       window.KeaghanSfx?.playMenuClick?.();
+      saveState(state);
+      startTvForbiddenFinale();
+      return;
     }
-    if (!armed) {
-      cabinet.classList.remove("is-pressed");
-      cipher?.classList.remove("is-pressed");
+    lock?.classList.add("is-wrong");
+    window.setTimeout(() => lock?.classList.remove("is-wrong"), 380);
+    tvForbiddenPass = "";
+    paintTvForbiddenCode();
+    setToast(state, "Wrong passcode.");
+    renderHud();
+  }
+
+  function handleTvForbiddenKey(key) {
+    if (!state || !isTvForbiddenCodeArmed() || tvPhase !== "setup") return;
+    const progress = ensureTvForbidden(state);
+    if (!progress.wires || progress.passcode) return;
+    if (key === "clear") {
+      tvForbiddenPass = "";
+      paintTvForbiddenCode();
+      return;
     }
+    if (!/^[0-9]$/.test(key)) return;
+    if (tvForbiddenPass.length >= 4) return;
+    tvForbiddenPass += key;
+    paintTvForbiddenCode();
+    if (tvForbiddenPass.length === 4) submitTvForbiddenPass();
+  }
+
+  function finishTvForbiddenWire(fromIndex, rightColor) {
+    if (!state) return;
+    const progress = ensureTvForbidden(state);
+    if (progress.wireDone[fromIndex]) return;
+    if (fromIndex !== rightColor) return;
+    progress.wireDone[fromIndex] = true;
+    if (progress.wireDone.every(Boolean)) {
+      progress.wires = true;
+      setToast(state, "Wires locked — the last door needs a passcode.");
+      window.KeaghanSfx?.playMenuClick?.();
+    }
+    saveState(state);
+    syncTvForbiddenHatch();
+    renderHud();
   }
 
   function adjustTvSpeed(delta) {
@@ -6145,6 +6986,11 @@ window.IslandFoundry = (() => {
       renderHud();
       return;
     }
+    if (tvForbiddenBriefingActive && !opts.force) {
+      setToast(state, "The forbidden channel won't let go…");
+      renderHud();
+      return;
+    }
     stopTvPlayback();
     stopTvCorruptTicker();
     clearTvSixSevenOutro();
@@ -6182,6 +7028,9 @@ window.IslandFoundry = (() => {
     window.KeaghanSfx?.stopSixSevenAudio?.();
     window.KeaghanSfx?.stopSixSevenCrowdChant?.();
     restoreTvFinaleBgm();
+    stopTvForbiddenFinale(false);
+    stopTvForbiddenLockdown(false);
+    stopTvForbiddenBriefing();
     hideModal("tv-modal");
   }
 
@@ -6237,12 +7086,23 @@ window.IslandFoundry = (() => {
         return;
       }
 
+      const keyBtn = event.target.closest("[data-tv-key]");
+      if (keyBtn && tvPhase === "setup") {
+        handleTvForbiddenKey(keyBtn.dataset.tvKey);
+        return;
+      }
+
       const action = event.target.closest("[data-tv]")?.dataset.tv;
       if (!action) return;
       if (action === "off") {
         const wasWatching = tvPhase === "watch";
         if (isTvSixSevenTrapped()) {
           setToast(state, "6-7 won't let you leave…");
+          renderHud();
+          return;
+        }
+        if (tvForbiddenBriefingActive) {
+          setToast(state, "The forbidden channel won't let go…");
           renderHud();
           return;
         }
@@ -6259,23 +7119,35 @@ window.IslandFoundry = (() => {
         adjustTvLoops(1);
         return;
       }
+      if (action === "charcoal-slot") {
+        trySeatTvForbiddenCharcoal();
+        return;
+      }
+      if (action === "charcoal-take") {
+        tryTakeTvForbiddenCharcoal();
+        return;
+      }
       if (action === "forbidden") {
         if (!isTvForbiddenCodeArmed() || tvPhase !== "setup") return;
+        if (tvForbiddenBriefingActive || tvForbiddenLockdownActive || tvForbiddenFinaleActive) return;
+        const progress = state ? ensureTvForbidden(state) : null;
+        if (!progress?.passcode) return;
         const cabinet = document.getElementById("tv-forbidden");
+        if (!cabinet?.classList.contains("is-finale-lit")) return;
         const cipher = document.getElementById("tv-forbidden-cipher");
-        cabinet?.classList.add("is-pressed");
+        cabinet.classList.add("is-pressed");
         cipher?.classList.add("is-pressed");
         window.setTimeout(() => {
-          cabinet?.classList.remove("is-pressed");
+          cabinet.classList.remove("is-pressed");
           cipher?.classList.remove("is-pressed");
         }, 900);
         unlockEasterEgg("forbiddenChannel");
-        setToast(state, "Forbidden channel — signal locked out… for now.");
         window.KeaghanSfx?.playMenuClick?.();
-        renderHud();
+        startTvForbiddenBriefing();
         return;
       }
       if (action === "watch") {
+        if (tvForbiddenBriefingActive) return;
         if (isTvSixSevenLockdown()) {
           setToast(state, "6-7 is loading the loops for you…");
           renderHud();
@@ -6300,6 +7172,17 @@ window.IslandFoundry = (() => {
     const onPointerMove = (event) => {
       if (tvPhase !== "setup") return;
       if (isTvSixSevenLockdown()) return;
+      if (tvWireDrag && event.pointerId === tvWireDrag.pointerId) {
+        const svg = document.getElementById("tv-forbidden-wire-svg");
+        if (svg) {
+          const rect = svg.getBoundingClientRect();
+          paintTvForbiddenWireLines({
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top,
+          });
+        }
+        return;
+      }
       if (tvSpeedDrag && event.pointerId === tvSpeedDrag.pointerId) {
         tvSpeedLevel = tvSpeedLevelFromClient(event.clientX, event.clientY);
         paintTvSpeedDial();
@@ -6310,6 +7193,20 @@ window.IslandFoundry = (() => {
     };
 
     const onPointerUp = (event) => {
+      if (tvWireDrag && event.pointerId === tvWireDrag.pointerId) {
+        const over = document.elementFromPoint(event.clientX, event.clientY);
+        const right = over?.closest?.("[data-tv-wire='right']");
+        if (right) {
+          finishTvForbiddenWire(tvWireDrag.fromIndex, Number(right.dataset.tvWireColor));
+        } else {
+          paintTvForbiddenWireLines();
+        }
+        tvWireDrag = null;
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+        window.removeEventListener("pointercancel", onPointerUp);
+        return;
+      }
       if (tvSpeedDrag && event.pointerId === tvSpeedDrag.pointerId) {
         tvSpeedDrag = null;
         window.removeEventListener("pointermove", onPointerMove);
@@ -6327,6 +7224,19 @@ window.IslandFoundry = (() => {
     modal.addEventListener("pointerdown", (event) => {
       if (tvPhase !== "setup") return;
       if (isTvSixSevenLockdown()) return;
+      const leftWire = event.target.closest("[data-tv-wire='left']");
+      if (leftWire) {
+        const fromIndex = Number(leftWire.dataset.tvWireIndex);
+        const progress = state ? ensureTvForbidden(state) : null;
+        if (!progress?.charcoal || progress.wires || progress.wireDone[fromIndex]) return;
+        event.preventDefault();
+        tvWireDrag = { pointerId: event.pointerId, fromIndex };
+        leftWire.setPointerCapture?.(event.pointerId);
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp);
+        window.addEventListener("pointercancel", onPointerUp);
+        return;
+      }
       const dialFace = event.target.closest("#tv-speed-dial-face");
       if (dialFace) {
         event.preventDefault();
@@ -7504,6 +8414,7 @@ window.IslandFoundry = (() => {
   let openRecipes = false;
   let recipesSelectedId = null; // null = category grid; set = detail view
   let recipesCategory = "everything"; // "everything" | "items" | "tools" | "food" | "buildings"
+  let recipesQuery = "";
   let openBuildMenu = false;
   let openBaseEnterPrompt = false;
   let openBaseLeavePrompt = false;
@@ -7514,6 +8425,10 @@ window.IslandFoundry = (() => {
   /** Tile to shove the player back to if they decline leaving via an exit door. */
   let baseLeaveFrom = null;
   let gamePaused = false;
+  let fpvMode = false;
+  let fpvTurning = false;
+  let fpvTurnTimer = null;
+  const FPV_TURN_MS = 340;
   let advancementsSig = "";
   let easterEggsSig = "";
   let playerCraftGrid = [null, null, null, null];
@@ -7588,8 +8503,8 @@ window.IslandFoundry = (() => {
       }
     } else {
       if (progressBar) progressBar.style.width = "0%";
-      if (progressLabel) progressLabel.textContent = "No recipe — add iron or copper ore";
-      if (progressTime) progressTime.textContent = "Iron = 10 min · Copper = 15 min";
+      if (progressLabel) progressLabel.textContent = "No recipe — add ore or a log";
+      if (progressTime) progressTime.textContent = "Log = 5 min · Iron = 10 min · Copper = 15 min";
     }
 
     if (fuelSlot) {
@@ -7700,7 +8615,7 @@ window.IslandFoundry = (() => {
     const m = findOpenSmelterMachine();
     if (!m || !itemId || amount < 1) return 0;
     if (!getSmeltRecipe(itemId)) {
-      setToast(state, "Only iron or copper ore goes in input");
+      setToast(state, "Only ore or logs go in input");
       return 0;
     }
     const room = inputFreeSpace(m, itemId);
@@ -7883,7 +8798,7 @@ window.IslandFoundry = (() => {
 
     renderSmelterUi();
     renderHud();
-    setToast(state, "Smelter open — load ore & log/coal for heat");
+    setToast(state, "Smelter open — logs smelt to charcoal (5 min); ore to ingots");
   }
 
   function closeSmelterUi() {
@@ -9633,6 +10548,7 @@ window.IslandFoundry = (() => {
     openRecipes = false;
     recipesSelectedId = null;
     recipesCategory = "everything";
+    recipesQuery = "";
     hideModal("recipes-modal");
   }
 
@@ -9642,6 +10558,7 @@ window.IslandFoundry = (() => {
     "stick",
     "stone",
     "coal",
+    "charcoal",
     "ironOre",
     "copperOre",
     "ironIngot",
@@ -9711,6 +10628,78 @@ window.IslandFoundry = (() => {
     return GameData.getItem(id)?.name || id;
   }
 
+  function guideMatchesQuery(id, query) {
+    const q = String(query || "").trim().toLowerCase();
+    if (!q) return true;
+    return guideDisplayName(id, recipesCategory).toLowerCase().includes(q);
+  }
+
+  function guideRecipeCellHtml(itemId) {
+    if (!itemId) return `<span class="recipes-recipe__cell is-empty" aria-hidden="true"></span>`;
+    const item = GameData.getItem(itemId);
+    const name = item?.name || itemId;
+    return `<span class="recipes-recipe__cell" title="${name}">
+      <span class="recipes-recipe__icon">${item?.icon || "?"}</span>
+    </span>`;
+  }
+
+  function guideRecipeHtml(id) {
+    const craft = (GameData.recipes || []).find((r) => r.output?.id === id);
+    if (craft?.layout) {
+      const size = craft.layout.length > 4 ? 3 : 2;
+      const cells = craft.layout.map((cell) => guideRecipeCellHtml(cell)).join("");
+      const out = GameData.getItem(craft.output.id);
+      const count = craft.output.count > 1 ? ` ×${craft.output.count}` : "";
+      const bench = craft.atStation ? "Workroom 3×3" : "Tab inventory 2×2";
+      return `
+        <div class="recipes-recipe">
+          <div class="recipes-recipe__row">
+            <div class="recipes-recipe__grid recipes-recipe__grid--${size}">${cells}</div>
+            <span class="recipes-recipe__arrow" aria-hidden="true">→</span>
+            <span class="recipes-recipe__out">${out?.icon || ""} ${out?.name || id}${count}</span>
+          </div>
+          <p class="recipes-recipe__note">${bench}</p>
+        </div>
+      `;
+    }
+
+    const smelt = (GameData.smeltRecipes || []).find((r) => r.output === id);
+    if (smelt) {
+      const input = GameData.getItem(smelt.input);
+      const output = GameData.getItem(smelt.output);
+      return `
+        <div class="recipes-recipe">
+          <div class="recipes-recipe__row">
+            ${guideRecipeCellHtml(smelt.input)}
+            <span class="recipes-recipe__arrow" aria-hidden="true">→</span>
+            <span class="recipes-recipe__out">${output?.icon || ""} ${output?.name || id}</span>
+          </div>
+          <p class="recipes-recipe__note">Smelter · ${smelt.minutes} in-game min${input ? ` · ${input.name}` : ""}</p>
+        </div>
+      `;
+    }
+
+    const buildKey = id === "powerLine" ? "cable" : id;
+    const cost = GameData.buildCosts?.[buildKey];
+    const isBuilding = id === "powerLine" || Boolean(GameData.buildCosts?.[id]);
+    if (cost && isBuilding) {
+      const chips = Object.entries(cost)
+        .map(([cid, n]) => {
+          const item = GameData.getItem(cid);
+          return `<span class="recipes-recipe__cost">${item?.icon || ""} ${item?.name || cid} ×${n}</span>`;
+        })
+        .join("");
+      return `
+        <div class="recipes-recipe">
+          <div class="recipes-recipe__costs">${chips}</div>
+          <p class="recipes-recipe__note">${id === "powerLine" ? "Build with Q — Power Line" : "Build with Q"}</p>
+        </div>
+      `;
+    }
+
+    return `<p class="recipes-recipe__none">No crafting recipe.</p>`;
+  }
+
   function recipesBrowserHtml() {
     // Detail view replaces the button grid entirely.
     if (recipesSelectedId) {
@@ -9735,6 +10724,10 @@ window.IslandFoundry = (() => {
                 <p>${guide.how}</p>
               </div>
               <div class="recipes-detail__block">
+                <h4>Recipe</h4>
+                ${guideRecipeHtml(recipesSelectedId)}
+              </div>
+              <div class="recipes-detail__block">
                 <h4>Used for</h4>
                 <p>${guide.uses}</p>
               </div>
@@ -9744,7 +10737,9 @@ window.IslandFoundry = (() => {
       }
     }
 
-    const ids = guideIdsForCategory(recipesCategory);
+    const ids = guideIdsForCategory(recipesCategory).filter((id) =>
+      recipesCategory === "everything" ? guideMatchesQuery(id, recipesQuery) : true
+    );
     const tiles = ids
       .map((id) => {
         const item = guideItemForId(id);
@@ -9764,13 +10759,17 @@ window.IslandFoundry = (() => {
           </button>`;
     }).join("");
 
+    const gridBody = ids.length
+      ? tiles
+      : `<p class="recipes-empty">no results. :(</p>`;
+
     return `
       <div class="recipes-layout">
         <div class="recipes-cats" role="tablist" aria-label="Guide categories">
           ${catButtons}
         </div>
         <section class="recipes-section" aria-label="${guideCategoryLabel(recipesCategory)}">
-          <div class="recipes-tile-grid">${tiles}</div>
+          <div class="recipes-tile-grid${ids.length ? "" : " is-empty"}">${gridBody}</div>
         </section>
       </div>
     `;
@@ -9779,7 +10778,25 @@ window.IslandFoundry = (() => {
   function renderRecipesUi() {
     const browser = document.getElementById("recipes-browser");
     if (!browser || !state) return;
+    const active = document.activeElement;
+    const keepSearch = active?.id === "recipes-search";
+    const caret = keepSearch ? active.selectionStart : null;
     browser.innerHTML = recipesBrowserHtml();
+
+    const wrap = document.getElementById("recipes-search-wrap");
+    const input = document.getElementById("recipes-search");
+    const showSearch = openRecipes && recipesCategory === "everything" && !recipesSelectedId;
+    if (wrap) {
+      wrap.hidden = !showSearch;
+      wrap.setAttribute("aria-hidden", showSearch ? "false" : "true");
+    }
+    if (input) {
+      if (input.value !== recipesQuery) input.value = recipesQuery;
+      if (showSearch && keepSearch) {
+        input.focus();
+        if (Number.isFinite(caret)) input.setSelectionRange(caret, caret);
+      }
+    }
   }
 
   function openRecipesUi() {
@@ -9792,6 +10809,7 @@ window.IslandFoundry = (() => {
     openRecipes = true;
     recipesSelectedId = null;
     recipesCategory = "everything";
+    recipesQuery = "";
     showModal("recipes-modal");
     renderRecipesUi();
     renderHud();
@@ -9975,10 +10993,29 @@ window.IslandFoundry = (() => {
       toggleDemolishMode();
       return;
     }
+    if (event.key === "F1") {
+      event.preventDefault();
+      toggleFpvMode();
+      return;
+    }
 
     const move = event.key.length === 1 ? event.key.toLowerCase() : "";
     if (move === "w" || move === "a" || move === "s" || move === "d") {
       event.preventDefault();
+      if (fpvMode) {
+        if (move === "a") {
+          turnFpv(-1);
+          return;
+        }
+        if (move === "d") {
+          turnFpv(1);
+          return;
+        }
+        const face = FPV_FACE[normalizeFacing(state.player.facing)];
+        if (move === "w") tryMovePlayer(face.fx, face.fy);
+        else tryMovePlayer(-face.fx, -face.fy);
+        return;
+      }
       const step =
         move === "w" ? [0, -1] : move === "s" ? [0, 1] : move === "a" ? [-1, 0] : [1, 0];
       tryMovePlayer(step[0], step[1]);
@@ -10522,6 +11559,13 @@ window.IslandFoundry = (() => {
     const modal = document.getElementById("recipes-modal");
     if (!modal) return;
 
+    modal.addEventListener("input", (event) => {
+      if (!openRecipes) return;
+      if (event.target?.id !== "recipes-search") return;
+      recipesQuery = String(event.target.value || "");
+      renderRecipesUi();
+    });
+
     modal.addEventListener("click", (event) => {
       if (event.target.closest("[data-recipes-close]")) {
         closeRecipesUi();
@@ -10555,7 +11599,8 @@ window.IslandFoundry = (() => {
 
   function moveInvToSmelter(itemId) {
     if (!itemId) return;
-    if (isSmelterFuel(itemId)) transferToFuel(itemId, 1);
+    if (getSmeltRecipe(itemId)) transferToInput(itemId, 1);
+    else if (isSmelterFuel(itemId)) transferToFuel(itemId, 1);
     else transferToInput(itemId, 1);
     afterSmelterChange();
   }
@@ -11194,6 +12239,237 @@ window.IslandFoundry = (() => {
       grid.appendChild(btn);
     }
     refreshBuildPreview();
+    syncSkySkyline();
+    syncSkyResources();
+    if (fpvMode) renderFpv();
+  }
+
+  const FPV_SIZE = 108;
+  const FPV_EYE = 3.35;
+  const FPV_CAM_BACK = 0.2;
+  const FPV_FWD = 6;
+  const FPV_BACK = 6;
+  const FPV_SIDE = 5;
+  const FPV_FACE = {
+    n: { fx: 0, fy: -1, rx: 1, ry: 0 },
+    s: { fx: 0, fy: 1, rx: -1, ry: 0 },
+    e: { fx: 1, fy: 0, rx: 0, ry: 1 },
+    w: { fx: -1, fy: 0, rx: 0, ry: -1 },
+  };
+
+  function fpvMachineExtra(tile) {
+    if (tile?.machine === "base") return 3;
+    if (
+      tile?.machine === "smelter" ||
+      tile?.machine === "generator" ||
+      tile?.machine === "drill" ||
+      tile?.machine === "craftingStation" ||
+      tile?.machine === "powerPole"
+    ) {
+      return 2;
+    }
+    if (tile?.machine === "fan") return 1;
+    return 0;
+  }
+
+  function fpvTileColor(tile, layer, topLayer) {
+    const ground = state && isInsideBase(state) ? 0 : tileHeight(tile);
+    if (layer < ground) return "#6b4524";
+    if (state && isInsideBase(state)) {
+      if (tile?.kind === "wall") return "#3d342c";
+      if (tile?.kind === "exit" || tile?.kind === "door") return "#5a4030";
+      if (tile?.room === "kitchen") return "#4a3a28";
+      if (tile?.room === "storage") return "#4a3c2a";
+      if (tile?.room === "living") return "#35503c";
+      if (tile?.room === "bedroom") return "#3a3048";
+      if (tile?.room === "workroom") return "#3e3a30";
+      return "#4a5348";
+    }
+    if (tile?.machine === "base") return "#6a7a88";
+    if (tile?.machine === "smelter") return "#c47a28";
+    if (tile?.machine === "generator") return "#d4a22a";
+    if (tile?.machine === "drill") return "#3d8a78";
+    if (tile?.machine === "craftingStation") return "#8a6a3a";
+    if (tile?.machine === "powerPole") return "#4a5348";
+    if (tile?.machine === "fan") return "#3a6a78";
+    if (tile?.node === "tree") return "#3d6a32";
+    if (tile?.node === "rock") return "#6a727c";
+    if (tile?.node === "coal") return "#2e2e2e";
+    if (tile?.node === "iron") return "#b06a3a";
+    if (tile?.node === "copper") return "#b87333";
+    if (tile?.node === "carrot") return "#4a6a28";
+    return "#2f5a3a";
+  }
+
+  function fpvCubeHtml(x, y, z, color, icon) {
+    const t = `translate3d(${x}px, ${y}px, ${z}px)`;
+    const iconHtml = icon
+      ? `<span class="fpv-cube__icon">${icon}</span>`
+      : "";
+    return `<div class="fpv-cube" style="transform:${t};--fpv-color:${color}">
+      <span class="fpv-cube__face fpv-cube__face--front">${iconHtml}</span>
+      <span class="fpv-cube__face fpv-cube__face--back"></span>
+      <span class="fpv-cube__face fpv-cube__face--left"></span>
+      <span class="fpv-cube__face fpv-cube__face--right"></span>
+      <span class="fpv-cube__face fpv-cube__face--top"></span>
+      <span class="fpv-cube__face fpv-cube__face--bottom"></span>
+    </div>`;
+  }
+
+  function fpvTileHeight(tile, inside) {
+    if (inside) {
+      if (tile?.kind === "wall") return 3;
+      if (tile?.kind === "exit" || tile?.kind === "door") return 2;
+      return 0;
+    }
+    return tileHeight(tile) + fpvMachineExtra(tile);
+  }
+
+  function fpvTurnDegrees(from, to) {
+    const order = { n: 0, e: 1, s: 2, w: 3 };
+    const delta = (order[to] - order[from] + 4) % 4;
+    if (delta === 1) return -90;
+    if (delta === 3) return 90;
+    return 180;
+  }
+
+  function turnFpv(dir) {
+    if (!state || !fpvMode || fpvTurning) return false;
+    const order = ["n", "e", "s", "w"];
+    const from = normalizeFacing(state.player.facing);
+    const next = order[(order.indexOf(from) + dir + 4) % 4];
+    state.player.facing = next;
+    startFpvTurn(from, next);
+    saveState(state);
+    return true;
+  }
+
+  function startFpvTurn(from, to) {
+    const rig = document.getElementById("fpv-rig");
+    if (!rig) {
+      renderFpv();
+      return;
+    }
+    fpvTurning = true;
+    if (fpvTurnTimer != null) {
+      window.clearTimeout(fpvTurnTimer);
+      fpvTurnTimer = null;
+    }
+    const deg = fpvTurnDegrees(from, to);
+    rig.style.transition = `transform ${FPV_TURN_MS}ms cubic-bezier(0.18, 0.7, 0.22, 1)`;
+    rig.style.transform = `rotateY(${deg}deg)`;
+    fpvTurnTimer = window.setTimeout(() => {
+      fpvTurning = false;
+      fpvTurnTimer = null;
+      rig.style.transition = "none";
+      rig.style.transform = "";
+      renderFpv();
+    }, FPV_TURN_MS);
+  }
+
+  function toggleFpvMode() {
+    if (!state || !playActive || gamePaused) return;
+    if (fpvTurnTimer != null) {
+      window.clearTimeout(fpvTurnTimer);
+      fpvTurnTimer = null;
+    }
+    fpvTurning = false;
+    fpvMode = !fpvMode;
+    const view = document.getElementById("fpv-view");
+    const stage = document.querySelector(".world-stage");
+    if (view) {
+      view.hidden = !fpvMode;
+      view.setAttribute("aria-hidden", fpvMode ? "false" : "true");
+    }
+    stage?.classList.toggle("is-fpv", fpvMode);
+    if (fpvMode) {
+      renderFpv();
+      setToast(state, "F1 · player view (2 blocks tall)");
+    } else {
+      setToast(state, "F1 · map view");
+    }
+    renderHud();
+  }
+
+  function renderFpv() {
+    const rig = document.getElementById("fpv-rig");
+    const sky = document.getElementById("fpv-sky");
+    const view = document.getElementById("fpv-view");
+    if (!rig || !state || !fpvMode || fpvTurning) return;
+    if (view) {
+      view.hidden = false;
+      view.removeAttribute("hidden");
+    }
+    normalizePlayer(state);
+    const inside = isInsideBase(state);
+    const night = !inside && isNightTime(state.worldMinutes);
+    sky?.classList.toggle("is-night", night);
+    sky?.classList.toggle("is-inside", inside);
+
+    const px = state.player.x;
+    const py = state.player.y;
+    const face = FPV_FACE[normalizeFacing(state.player.facing)];
+    const standTile = getActiveTile(state, px, py);
+    const stand = inside ? 0 : tileHeight(standTile) + fpvMachineExtra(standTile);
+    const eyeLift = (stand + FPV_EYE) * FPV_SIZE;
+    const { cols, rows } = activeMapSize(state);
+    const parts = [];
+    const youIcon = isSixSevenModInstalled() ? "6-7" : "🧑‍🔧";
+
+    for (let fwd = -FPV_BACK; fwd <= FPV_FWD; fwd++) {
+      for (let side = -FPV_SIDE; side <= FPV_SIDE; side++) {
+        const tx = px + face.fx * fwd + face.rx * side;
+        const ty = py + face.fy * fwd + face.ry * side;
+        if (tx < 0 || ty < 0 || tx >= cols || ty >= rows) continue;
+        const tile = getActiveTile(state, tx, ty);
+        if (!tile) continue;
+        const wx = side * FPV_SIZE;
+        const wz = -(fwd + FPV_CAM_BACK) * FPV_SIZE;
+        const h = fpvTileHeight(tile, inside);
+        const self = tx === px && ty === py;
+        const label = self ? "" : tileLabel(tile);
+        const monster = !inside ? monsterAt(state, tx, ty) : null;
+
+        if (h <= 0) {
+          parts.push(
+            fpvCubeHtml(wx, 0.06 * FPV_SIZE + eyeLift, wz, fpvTileColor(tile, 0, 0), label)
+          );
+        } else {
+          for (let layer = 0; layer < h; layer++) {
+            const y = -((layer + 0.5) * FPV_SIZE) + eyeLift;
+            const icon = layer === h - 1 ? label : "";
+            parts.push(fpvCubeHtml(wx, y, wz, fpvTileColor(tile, layer, h - 1), icon));
+          }
+        }
+
+        if (self) {
+          const bodyY = -((stand + 0.5) * FPV_SIZE) + eyeLift;
+          const headY = -((stand + 1.5) * FPV_SIZE) + eyeLift;
+          parts.push(
+            fpvCubeHtml(wx, bodyY, wz, "#3d6a8a", "").replace(
+              'class="fpv-cube"',
+              'class="fpv-cube fpv-cube--you"'
+            )
+          );
+          parts.push(
+            fpvCubeHtml(wx, headY, wz, "#e0b089", youIcon).replace(
+              'class="fpv-cube"',
+              'class="fpv-cube fpv-cube--you fpv-cube--you-head"'
+            )
+          );
+        }
+
+        if (monster && !self) {
+          const my = -((Math.max(h, 0) + 0.85) * FPV_SIZE) + eyeLift;
+          const icon = isSixSevenModInstalled() ? "6-7" : GameData.monsters?.icon || "🧟";
+          parts.push(
+            `<div class="fpv-sprite" style="transform:translate3d(${wx}px, ${my}px, ${wz}px)">${icon}</div>`
+          );
+        }
+      }
+    }
+
+    rig.innerHTML = parts.join("");
   }
 
   function renderInventory() {

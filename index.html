@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Space+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="css/styles.css?v=20260812u" />
+    <link rel="stylesheet" href="css/styles.css?v=20260814e" />
   </head>
   <body>
     <div class="atmosphere" aria-hidden="true">
@@ -121,15 +121,8 @@
           </div>
           <div class="sky__hills sky__hills--far"></div>
           <div class="sky__hills sky__hills--mid"></div>
-          <div class="sky__trees">
-            <span class="sky__tree sky__tree--1"></span>
-            <span class="sky__tree sky__tree--2"></span>
-            <span class="sky__tree sky__tree--3"></span>
-            <span class="sky__tree sky__tree--4"></span>
-            <span class="sky__tree sky__tree--5"></span>
-            <span class="sky__tree sky__tree--6"></span>
-            <span class="sky__tree sky__tree--7"></span>
-          </div>
+          <div class="sky__skyline" id="sky-skyline" aria-hidden="true"></div>
+          <div class="sky__resources" id="sky-resources" aria-hidden="true"></div>
           <div class="sky__hills sky__hills--near"></div>
           <div class="sky__grass"></div>
           <div class="sky__meadow"></div>
@@ -395,6 +388,13 @@
           <section class="world-panel" aria-label="Island">
             <div class="world-stage">
               <div id="world-grid" class="world-grid" role="grid" aria-label="Resource island"></div>
+              <div id="fpv-view" class="fpv" hidden aria-hidden="true">
+                <div class="fpv__sky" id="fpv-sky"></div>
+                <div class="fpv__scene">
+                  <div class="fpv__rig" id="fpv-rig"></div>
+                </div>
+                <p class="fpv__hint">F1 · W/S walk · A/D turn</p>
+              </div>
               <div id="world-lightning" class="world-lightning" aria-hidden="true">
                 <div class="world-lightning__flash" id="world-lightning-flash"></div>
                 <div class="world-lightning__bolts" id="world-lightning-bolts"></div>
@@ -568,17 +568,17 @@
                   id="smelter-fuel-slot"
                   class="smelter-slot"
                   data-smelter-slot="fuel"
-                  title="Coal fuel input"
+                  title="Fuel — Log, Planks, or Coal"
                 ></button>
               </div>
-              <p class="smelter-hint">Wire to a Coal Generator for electric heat, or burn Log / Planks / Coal (15 / 5 / 20). Empty fuel heat resets progress.</p>
+              <p class="smelter-hint">Wire to a Coal Generator for electric heat, or burn Log / Planks / Coal (15 / 5 / 20) in Fuel. Empty fuel heat resets progress.</p>
             </div>
           </section>
 
           <section class="smelter-col smelter-col--inv" aria-label="Inventory" data-smelter-drop="inv">
             <h3>Inventory</h3>
             <div id="smelter-inv-grid" class="smelter-grid smelter-grid--inv"></div>
-            <p class="smelter-hint">Drag ore → input · Optional fuel if unpowered · Drag back to inventory</p>
+            <p class="smelter-hint">Drag log or ore → input (log = charcoal, 5 min) · Fuel if unpowered · Drag back to inventory</p>
           </section>
         </div>
       </div>
@@ -917,15 +917,20 @@
             ✕
           </button>
         </header>
+        <aside class="storage-sticky" aria-hidden="true">
+          <p class="storage-sticky__text">1 - 6 - 3 - 7</p>
+        </aside>
 
         <div class="craft-station-body craft-station-body--no-list craft-station-body--table kitchen-body">
           <section class="craft-station-col craft-station-col--grid" aria-label="Item storage">
             <h3>Item crates</h3>
-            <div
-              id="storage-chest-grid"
-              class="smelter-grid kitchen-grid"
-              aria-label="15 item slots"
-            ></div>
+            <div class="storage-crates">
+              <div
+                id="storage-chest-grid"
+                class="smelter-grid kitchen-grid"
+                aria-label="15 item slots"
+              ></div>
+            </div>
             <p class="smelter-hint">
               Non-food only — <strong>15</strong> slots, up to <strong>50</strong> each. No Base
               Key. Click or drag to store / take.
@@ -969,6 +974,19 @@
           <strong>Food</strong>, or <strong>Buildings</strong>, then click a square for how to
           get/make it and what it’s used for. Press <strong>E</strong> anytime.
         </p>
+        <div class="recipes-search-row" id="recipes-search-wrap" hidden>
+          <label class="recipes-search">
+            <input
+              id="recipes-search"
+              class="recipes-search__input"
+              type="search"
+              placeholder="Type…"
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="Type to filter guide"
+            />
+          </label>
+        </div>
         <div id="recipes-browser" class="recipes-browser"></div>
       </div>
     </div>
@@ -1028,6 +1046,22 @@
       <!-- Escaped 6-7 swarm lives on the full screen (outside the TV panel). -->
       <div id="tv-six-seven-screen" class="tv-six-seven-screen" hidden aria-hidden="true"></div>
       <!-- Finale: cursed 6-7 blacks out the whole view. -->
+      <div id="tv-forbidden-blackout" class="tv-forbidden-blackout" hidden aria-hidden="true">
+        <div class="tv-forbidden-blackout__veil" aria-hidden="true"></div>
+        <div
+          id="tv-forbidden-blackout-eyes"
+          class="tv-forbidden-blackout__eyes"
+          hidden
+          aria-hidden="true"
+        >
+          <span class="tv-forbidden-blackout__eye tv-forbidden-blackout__eye--left"></span>
+          <span class="tv-forbidden-blackout__eye tv-forbidden-blackout__eye--right"></span>
+        </div>
+        <div class="tv-forbidden-blackout__copy">
+          <p class="tv-forbidden-blackout__stamp">CLASSIFIED — DO NOT TUNE</p>
+          <p id="tv-forbidden-blackout-line" class="tv-forbidden-blackout__line" hidden></p>
+        </div>
+      </div>
       <div id="tv-six-seven-blackout" class="tv-six-seven-blackout" hidden aria-hidden="true">
         <div class="tv-six-seven-blackout__void" aria-hidden="true"></div>
         <div class="tv-six-seven-blackout__glyphs" aria-hidden="true">
@@ -1168,10 +1202,32 @@
             </button>
             <div id="tv-forbidden" class="tv-forbidden" aria-hidden="true">
               <div class="tv-forbidden__hatch" id="tv-forbidden-hatch">
-                <div class="tv-forbidden__door tv-forbidden__door--left" aria-hidden="true"></div>
-                <div class="tv-forbidden__door tv-forbidden__door--right" aria-hidden="true"></div>
+                <div class="tv-forbidden__steam" id="tv-forbidden-steam" aria-hidden="true">
+                  <span class="tv-forbidden__puff tv-forbidden__puff--1"></span>
+                  <span class="tv-forbidden__puff tv-forbidden__puff--2"></span>
+                  <span class="tv-forbidden__puff tv-forbidden__puff--3"></span>
+                  <span class="tv-forbidden__puff tv-forbidden__puff--4"></span>
+                  <span class="tv-forbidden__puff tv-forbidden__puff--5"></span>
+                  <span class="tv-forbidden__puff tv-forbidden__puff--6"></span>
+                </div>
                 <div class="tv-forbidden__plate">
                   <div class="tv-forbidden__tape" aria-hidden="true"></div>
+                  <div class="tv-forbidden__siren tv-forbidden__siren--left" aria-hidden="true">
+                    <span class="tv-forbidden__siren-dome"></span>
+                    <span class="tv-forbidden__siren-beam"></span>
+                  </div>
+                  <div class="tv-forbidden__siren tv-forbidden__siren--right" aria-hidden="true">
+                    <span class="tv-forbidden__siren-dome"></span>
+                    <span class="tv-forbidden__siren-beam"></span>
+                  </div>
+                  <div class="tv-forbidden__side-steam" aria-hidden="true">
+                    <span class="tv-forbidden__side-puff tv-forbidden__side-puff--l1"></span>
+                    <span class="tv-forbidden__side-puff tv-forbidden__side-puff--l2"></span>
+                    <span class="tv-forbidden__side-puff tv-forbidden__side-puff--l3"></span>
+                    <span class="tv-forbidden__side-puff tv-forbidden__side-puff--r1"></span>
+                    <span class="tv-forbidden__side-puff tv-forbidden__side-puff--r2"></span>
+                    <span class="tv-forbidden__side-puff tv-forbidden__side-puff--r3"></span>
+                  </div>
                   <button
                     type="button"
                     class="tv-forbidden__btn"
@@ -1182,6 +1238,78 @@
                   >
                     <span class="tv-forbidden__btn-label">Forbidden<br />channel</span>
                   </button>
+                  <button
+                    type="button"
+                    class="tv-forbidden__slot tv-forbidden__slot--seated"
+                    id="tv-forbidden-seated"
+                    data-tv="charcoal-take"
+                    tabindex="-1"
+                    disabled
+                  >
+                    <span class="tv-forbidden__slot-well" id="tv-forbidden-seated-well">🌑</span>
+                    <span class="tv-forbidden__slot-label">Charcoal</span>
+                  </button>
+                </div>
+
+                <div class="tv-forbidden__gate tv-forbidden__gate--4" aria-hidden="true">
+                  <div class="tv-forbidden__door tv-forbidden__door--left"></div>
+                  <div class="tv-forbidden__door tv-forbidden__door--right"></div>
+                </div>
+
+                <div class="tv-forbidden__lock" id="tv-forbidden-lock">
+                  <p class="tv-forbidden__lock-title">Passcode</p>
+                  <div id="tv-forbidden-code" class="tv-forbidden__code" aria-live="polite">••••</div>
+                  <div class="tv-forbidden__keys" role="group" aria-label="Passcode keypad">
+                    <button type="button" class="tv-forbidden__key" data-tv-key="1">1</button>
+                    <button type="button" class="tv-forbidden__key" data-tv-key="2">2</button>
+                    <button type="button" class="tv-forbidden__key" data-tv-key="3">3</button>
+                    <button type="button" class="tv-forbidden__key" data-tv-key="4">4</button>
+                    <button type="button" class="tv-forbidden__key" data-tv-key="5">5</button>
+                    <button type="button" class="tv-forbidden__key" data-tv-key="6">6</button>
+                    <button type="button" class="tv-forbidden__key" data-tv-key="7">7</button>
+                    <button type="button" class="tv-forbidden__key" data-tv-key="8">8</button>
+                    <button type="button" class="tv-forbidden__key" data-tv-key="9">9</button>
+                    <button type="button" class="tv-forbidden__key tv-forbidden__key--wide" data-tv-key="clear">CLR</button>
+                    <button type="button" class="tv-forbidden__key" data-tv-key="0">0</button>
+                  </div>
+                </div>
+
+                <div class="tv-forbidden__gate tv-forbidden__gate--3" aria-hidden="true">
+                  <div class="tv-forbidden__door tv-forbidden__door--left"></div>
+                  <div class="tv-forbidden__door tv-forbidden__door--right"></div>
+                </div>
+
+                <div class="tv-forbidden__wires" id="tv-forbidden-wires" hidden>
+                  <div class="tv-forbidden__wire-col tv-forbidden__wire-col--left" id="tv-forbidden-wires-left"></div>
+                  <svg class="tv-forbidden__wire-svg" id="tv-forbidden-wire-svg" aria-hidden="true"></svg>
+                  <div class="tv-forbidden__wire-col tv-forbidden__wire-col--right" id="tv-forbidden-wires-right"></div>
+                  <div class="tv-forbidden__sparks" id="tv-forbidden-sparks" aria-hidden="true">
+                    <span></span><span></span><span></span><span></span><span></span><span></span>
+                  </div>
+                </div>
+
+                <div class="tv-forbidden__gate tv-forbidden__gate--2" aria-hidden="true">
+                  <div class="tv-forbidden__door tv-forbidden__door--left"></div>
+                  <div class="tv-forbidden__door tv-forbidden__door--right"></div>
+                </div>
+
+                <div class="tv-forbidden__char" id="tv-forbidden-char">
+                  <button
+                    type="button"
+                    class="tv-forbidden__slot"
+                    id="tv-forbidden-slot"
+                    data-tv="charcoal-slot"
+                    tabindex="-1"
+                    disabled
+                  >
+                    <span class="tv-forbidden__slot-well" id="tv-forbidden-slot-well"></span>
+                    <span class="tv-forbidden__slot-label">Charcoal slot</span>
+                  </button>
+                </div>
+
+                <div class="tv-forbidden__gate tv-forbidden__gate--1" aria-hidden="true">
+                  <div class="tv-forbidden__door tv-forbidden__door--left"></div>
+                  <div class="tv-forbidden__door tv-forbidden__door--right"></div>
                 </div>
               </div>
             </div>
@@ -1405,10 +1533,10 @@
       <div id="six-seven-arena-whiteout" class="six-seven-arena__whiteout" hidden aria-hidden="true"></div>
     </div>
 
-    <script src="js/data.js?v=20260812u" defer></script>
-    <script src="js/sfx.js?v=20260812u" defer></script>
-    <script src="js/game.js?v=20260812u" defer></script>
-    <script src="js/main.js?v=20260812u" defer></script>
+    <script src="js/data.js?v=20260814e" defer></script>
+    <script src="js/sfx.js?v=20260814e" defer></script>
+    <script src="js/game.js?v=20260814e" defer></script>
+    <script src="js/main.js?v=20260814e" defer></script>
   <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"a6d24ae9b9e349cc94bcb7dd3ded9822","r":1}' crossorigin="anonymous"></script>
 </body>
 </html>

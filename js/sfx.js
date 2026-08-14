@@ -3,6 +3,7 @@
  */
 window.KeaghanSfx = (() => {
   let ctx = null;
+  let forbiddenSiren = null;
 
   function ensureCtx() {
     if (!ctx) {
@@ -59,6 +60,205 @@ window.KeaghanSfx = (() => {
     g.connect(out);
     src.start(now);
     src.stop(now + seconds + 0.02);
+  }
+
+  function playForbiddenSteam() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const out = makeOut(audio, 0.42);
+    if (!out) return;
+    playNoise(audio, out, { seconds: 1.4, freq: 3200, q: 0.55, gain: 0.34, type: "bandpass" });
+    playNoise(audio, out, { seconds: 1.55, freq: 780, q: 0.4, gain: 0.16, type: "highpass", delay: 0.04 });
+  }
+
+  function playForbiddenSteamTail() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const out = makeOut(audio, 0.26);
+    if (!out) return;
+    playNoise(audio, out, { seconds: 1.65, freq: 1700, q: 0.42, gain: 0.14, type: "bandpass" });
+  }
+
+  function playForbiddenDoors() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const out = makeOut(audio, 0.5);
+    if (!out) return;
+    const now = audio.currentTime;
+    const osc = audio.createOscillator();
+    const grind = audio.createGain();
+    const filter = audio.createBiquadFilter();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(72, now);
+    osc.frequency.exponentialRampToValueAtTime(36, now + 2.15);
+    filter.type = "lowpass";
+    filter.frequency.value = 210;
+    grind.gain.setValueAtTime(0.0001, now);
+    grind.gain.exponentialRampToValueAtTime(0.2, now + 0.08);
+    grind.gain.exponentialRampToValueAtTime(0.0001, now + 2.2);
+    osc.connect(filter);
+    filter.connect(grind);
+    grind.connect(out);
+    osc.start(now);
+    osc.stop(now + 2.25);
+    playNoise(audio, out, { seconds: 2.15, freq: 170, q: 0.75, gain: 0.15, type: "lowpass" });
+  }
+
+  function startForbiddenSiren() {
+    stopForbiddenSiren();
+    const audio = ensureCtx();
+    if (!audio) return;
+    const out = makeOut(audio, 0.4);
+    if (!out) return;
+    const now = audio.currentTime;
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    const filter = audio.createBiquadFilter();
+    const lfo = audio.createOscillator();
+    const lfoGain = audio.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.value = 540;
+    filter.type = "lowpass";
+    filter.frequency.value = 1400;
+    lfo.type = "triangle";
+    lfo.frequency.value = 1.7;
+    lfoGain.gain.value = 190;
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.frequency);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.17, now + 0.08);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(out);
+    osc.start(now);
+    lfo.start(now);
+    forbiddenSiren = { audio, osc, lfo, gain, out };
+  }
+
+  function fadeForbiddenSiren() {
+    if (!forbiddenSiren) return;
+    const now = forbiddenSiren.audio.currentTime;
+    try {
+      forbiddenSiren.gain.gain.cancelScheduledValues(now);
+      forbiddenSiren.gain.gain.setValueAtTime(Math.max(0.0001, forbiddenSiren.gain.gain.value), now);
+      forbiddenSiren.gain.gain.exponentialRampToValueAtTime(0.0001, now + 4.4);
+    } catch {
+      /* ignore */
+    }
+    const handle = forbiddenSiren;
+    window.setTimeout(() => {
+      if (forbiddenSiren !== handle) return;
+      stopForbiddenSiren();
+    }, 4500);
+  }
+
+  function stopForbiddenSiren() {
+    if (!forbiddenSiren) return;
+    const handle = forbiddenSiren;
+    forbiddenSiren = null;
+    const now = handle.audio.currentTime;
+    try {
+      handle.gain.gain.cancelScheduledValues(now);
+      handle.gain.gain.setValueAtTime(Math.max(0.0001, handle.gain.gain.value), now);
+      handle.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
+    } catch {
+      /* ignore */
+    }
+    window.setTimeout(() => {
+      try {
+        handle.osc.stop();
+        handle.lfo.stop();
+      } catch {
+        /* ignore */
+      }
+    }, 120);
+  }
+
+  function playForbiddenTwerk() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const out = makeOut(audio, 0.48);
+    if (!out) return;
+    const now = audio.currentTime;
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    const filter = audio.createBiquadFilter();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(70, now);
+    osc.frequency.exponentialRampToValueAtTime(42, now + 0.16);
+    filter.type = "lowpass";
+    filter.frequency.value = 240;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.22, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(out);
+    osc.start(now);
+    osc.stop(now + 0.24);
+    playNoise(audio, out, { seconds: 0.2, freq: 130, q: 0.8, gain: 0.14, type: "lowpass" });
+  }
+
+  function playForbiddenSlam() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const out = makeOut(audio, 0.55);
+    if (!out) return;
+    const now = audio.currentTime;
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    const filter = audio.createBiquadFilter();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(110, now);
+    osc.frequency.exponentialRampToValueAtTime(38, now + 0.14);
+    filter.type = "lowpass";
+    filter.frequency.value = 320;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.28, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(out);
+    osc.start(now);
+    osc.stop(now + 0.2);
+    playNoise(audio, out, { seconds: 0.16, freq: 220, q: 0.7, gain: 0.2, type: "lowpass" });
+  }
+
+  function playForbiddenSparks() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const out = makeOut(audio, 0.36);
+    if (!out) return;
+    playNoise(audio, out, { seconds: 0.12, freq: 4200, q: 1.2, gain: 0.22, type: "bandpass", crackle: true });
+    playNoise(audio, out, { seconds: 0.1, freq: 2800, q: 1.4, gain: 0.16, type: "bandpass", delay: 0.08, crackle: true });
+    playNoise(audio, out, { seconds: 0.14, freq: 3600, q: 1.1, gain: 0.18, type: "highpass", delay: 0.16, crackle: true });
+    playNoise(audio, out, { seconds: 0.11, freq: 2400, q: 1.3, gain: 0.14, type: "bandpass", delay: 0.28, crackle: true });
+    playNoise(audio, out, { seconds: 0.18, freq: 1800, q: 0.8, gain: 0.1, type: "highpass", delay: 0.4, crackle: true });
+  }
+
+  function playForbiddenRise() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    const out = makeOut(audio, 0.46);
+    if (!out) return;
+    const now = audio.currentTime;
+    const osc = audio.createOscillator();
+    const lift = audio.createGain();
+    const filter = audio.createBiquadFilter();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(48, now);
+    osc.frequency.exponentialRampToValueAtTime(86, now + 1.05);
+    filter.type = "lowpass";
+    filter.frequency.value = 260;
+    lift.gain.setValueAtTime(0.0001, now);
+    lift.gain.exponentialRampToValueAtTime(0.18, now + 0.1);
+    lift.gain.exponentialRampToValueAtTime(0.0001, now + 1.15);
+    osc.connect(filter);
+    filter.connect(lift);
+    lift.connect(out);
+    osc.start(now);
+    osc.stop(now + 1.2);
+    playNoise(audio, out, { seconds: 1.15, freq: 140, q: 0.7, gain: 0.12, type: "lowpass" });
   }
 
   /** Soft mechanical UI confirm — low body + muted contact click. */
@@ -543,6 +743,14 @@ window.KeaghanSfx = (() => {
     timer: 0,
     beat: 0,
   };
+  let etherealMusic = {
+    playing: false,
+    bus: null,
+    oscillators: [],
+    nodes: [],
+    timer: 0,
+    beat: 0,
+  };
 
   // Soft drums / piano fade in after you keep playing (bars ≈ 3.4s each).
   const DRUMS_HATS_AFTER = 8; // ~27s
@@ -593,6 +801,11 @@ window.KeaghanSfx = (() => {
       const target = music.paused ? 0.0001 : musicTargetGain();
       music.bus.gain.cancelScheduledValues(now);
       music.bus.gain.setTargetAtTime(target, now, 0.08);
+    }
+    if (etherealMusic.bus) {
+      const target = etherealMusic.playing ? musicTargetGain() * 0.92 : 0.0001;
+      etherealMusic.bus.gain.cancelScheduledValues(now);
+      etherealMusic.bus.gain.setTargetAtTime(target, now, 0.1);
     }
     refreshWeatherVolumes();
   }
@@ -1647,6 +1860,237 @@ window.KeaghanSfx = (() => {
     refreshVolumes();
   }
 
+  function playCrystal(audio, bus, freq, when, dur = 2.6, peak = 0.055) {
+    const ratios = [1, 2.01, 2.76, 4.07];
+    ratios.forEach((ratio, i) => {
+      playTone(audio, bus, {
+        freq: freq * ratio,
+        when: when + i * 0.012,
+        dur: dur * (1 - i * 0.08),
+        peak: peak * (i === 0 ? 0.7 : 0.28 / ratio),
+        type: i % 2 === 0 ? "sine" : "triangle",
+        filterFreq: 5200 - i * 400,
+      });
+    });
+    const delay = Math.max(0, when - audio.currentTime);
+    playNoise(audio, bus, {
+      seconds: 0.16,
+      freq: 6200,
+      q: 0.7,
+      gain: peak * 0.22,
+      type: "highpass",
+      delay,
+    });
+  }
+
+  function playChime(audio, bus, freq, when, peak = 0.07) {
+    playTone(audio, bus, {
+      freq,
+      when,
+      dur: 2.8,
+      peak,
+      type: "sine",
+      filterFreq: 6400,
+    });
+    playTone(audio, bus, {
+      freq: freq * 2,
+      when: when + 0.008,
+      dur: 1.8,
+      peak: peak * 0.35,
+      type: "triangle",
+      filterFreq: 7200,
+    });
+    playTone(audio, bus, {
+      freq: freq * 3.01,
+      when: when + 0.016,
+      dur: 1.1,
+      peak: peak * 0.12,
+      type: "sine",
+      filterFreq: 8000,
+    });
+  }
+
+  function scheduleEtherealBar() {
+    if (!etherealMusic.playing || !ctx || !etherealMusic.bus) return;
+    const audio = ctx;
+    const now = audio.currentTime + 0.04;
+    const bar = etherealMusic.beat % 8;
+    etherealMusic.beat += 1;
+    const bus = etherealMusic.bus;
+
+    const chords = [
+      [0, 2, 4],
+      [0, 2, 4],
+      [3, 5, 7],
+      [3, 5, 7],
+      [4, 6, 8],
+      [4, 6, 8],
+      [0, 2, 5],
+      [7, 4, 2],
+    ];
+    const chord = chords[bar];
+    playChord(audio, bus, chord, now, 4.1, 0.048);
+
+    const arp = [chord[0], chord[1], chord[2], chord[1] + 7, chord[2], chord[0] + 7];
+    arp.forEach((deg, i) => {
+      playTone(audio, bus, {
+        freq: musicFreq(deg, 1),
+        when: now + 0.2 + i * 0.52,
+        dur: 0.7,
+        peak: 0.055,
+        type: "triangle",
+        filterFreq: 3000,
+      });
+    });
+
+    const leads = [
+      [4, 5, 7, 5, 4, 2, 0, 2],
+      [7, 5, 4, 5, 7, 9, 7, 5],
+      [5, 4, 2, 4, 5, 7, 8, 7],
+      [2, 4, 5, 7, 5, 4, 2, 0],
+      [7, 8, 7, 5, 4, 5, 2, 4],
+      [4, 2, 0, 2, 4, 5, 7, 4],
+      [5, 7, 9, 7, 5, 4, 2, 0],
+      [0, 2, 4, 5, 4, 2, 4, 0],
+    ];
+    leads[bar].forEach((deg, i) => {
+      const t = now + 0.28 + i * 0.46;
+      playTone(audio, bus, {
+        freq: musicFreq(deg, 2),
+        when: t,
+        dur: 0.62,
+        peak: 0.07,
+        type: "sine",
+        filterFreq: 3600,
+      });
+      playTone(audio, bus, {
+        freq: musicFreq(deg, 3),
+        when: t + 0.02,
+        dur: 0.34,
+        peak: 0.024,
+        type: "triangle",
+        filterFreq: 4800,
+      });
+    });
+
+    const bassDeg = [0, 0, 3, 3, 4, 4, 0, 7][bar];
+    playPianoNote(audio, bus, musicFreq(bassDeg, 0), now, 2.6, 0.045);
+    playPianoNote(audio, bus, musicFreq(bassDeg, 1), now + 0.03, 2.3, 0.026);
+    const pianoPhrase = [0, 2, 4, 7, 4, 2, 0, 2];
+    pianoPhrase.forEach((deg, i) => {
+      playPianoNote(audio, bus, musicFreq(deg, 2), now + 0.22 + i * 0.48, 1.15, 0.06);
+    });
+
+    if (bar % 2 === 0) {
+      playCymbalCrash(audio, bus, now, bar % 4 === 0 ? 0.07 : 0.045);
+    }
+
+    chord.forEach((deg, i) => {
+      playCrystal(audio, bus, musicFreq(deg, 3), now + 0.35 + i * 0.85, 2.8, 0.045);
+    });
+
+    const chimeDegs = [4, 7, 9, 12, 9, 7];
+    chimeDegs.forEach((deg, i) => {
+      if ((bar + i) % 2 !== 0) return;
+      playChime(audio, bus, musicFreq(deg, 3), now + 0.4 + i * 0.62, 0.055);
+    });
+  }
+
+  function startEtherealMusic() {
+    const audio = ensureCtx();
+    if (!audio) return;
+    if (etherealMusic.playing) return;
+
+    etherealMusic.playing = true;
+    etherealMusic.beat = 0;
+    etherealMusic.bus = audio.createGain();
+    etherealMusic.bus.gain.value = 0.0001;
+    etherealMusic.bus.connect(audio.destination);
+    etherealMusic.bus.gain.linearRampToValueAtTime(musicTargetGain() * 0.92, audio.currentTime + 1.6);
+
+    const air = audio.createOscillator();
+    const airGain = audio.createGain();
+    const airFilter = audio.createBiquadFilter();
+    air.type = "sine";
+    air.frequency.value = 990;
+    airFilter.type = "bandpass";
+    airFilter.frequency.value = 2800;
+    airFilter.Q.value = 0.45;
+    airGain.gain.value = 0.02;
+    air.connect(airFilter);
+    airFilter.connect(airGain);
+    airGain.connect(etherealMusic.bus);
+    air.start();
+    etherealMusic.oscillators.push(air);
+    etherealMusic.nodes.push(airGain, airFilter);
+
+    const pad = audio.createOscillator();
+    const padB = audio.createOscillator();
+    const padGain = audio.createGain();
+    const padFilter = audio.createBiquadFilter();
+    pad.type = "sine";
+    padB.type = "triangle";
+    pad.frequency.value = MUSIC_ROOT;
+    padB.frequency.value = MUSIC_ROOT * 1.005;
+    padFilter.type = "lowpass";
+    padFilter.frequency.value = 1400;
+    padGain.gain.value = 0.04;
+    pad.connect(padFilter);
+    padB.connect(padFilter);
+    padFilter.connect(padGain);
+    padGain.connect(etherealMusic.bus);
+    pad.start();
+    padB.start();
+    etherealMusic.oscillators.push(pad, padB);
+    etherealMusic.nodes.push(padGain, padFilter);
+
+    scheduleEtherealBar();
+    if (etherealMusic.timer) window.clearInterval(etherealMusic.timer);
+    etherealMusic.timer = window.setInterval(() => {
+      if (!etherealMusic.playing) return;
+      scheduleEtherealBar();
+    }, 4200);
+  }
+
+  function stopEtherealMusic() {
+    if (etherealMusic.timer) {
+      window.clearInterval(etherealMusic.timer);
+      etherealMusic.timer = 0;
+    }
+    if (ctx && etherealMusic.bus) {
+      const now = ctx.currentTime;
+      try {
+        etherealMusic.bus.gain.cancelScheduledValues(now);
+        etherealMusic.bus.gain.setTargetAtTime(0.0001, now, 0.18);
+      } catch {
+        /* ignore */
+      }
+    }
+    const bus = etherealMusic.bus;
+    const oscs = etherealMusic.oscillators.slice();
+    const extras = etherealMusic.nodes.slice();
+    etherealMusic.playing = false;
+    etherealMusic.bus = null;
+    etherealMusic.oscillators = [];
+    etherealMusic.nodes = [];
+    etherealMusic.beat = 0;
+    window.setTimeout(() => {
+      stopOscList(oscs);
+      for (const node of extras) {
+        try {
+          node.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        bus?.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }, 700);
+  }
+
   function stopMusic() {
     clearMusicTimer();
     setWeather(null);
@@ -2534,6 +2978,16 @@ window.KeaghanSfx = (() => {
 
   return {
     playMenuClick,
+    playForbiddenSteam,
+    playForbiddenSteamTail,
+    playForbiddenDoors,
+    playForbiddenRise,
+    startForbiddenSiren,
+    fadeForbiddenSiren,
+    stopForbiddenSiren,
+    playForbiddenTwerk,
+    playForbiddenSlam,
+    playForbiddenSparks,
     playTreeRustle,
     playTreeCrash,
     playRockCrack,
@@ -2563,6 +3017,8 @@ window.KeaghanSfx = (() => {
     stopSixSevenAudio,
     startOminousMusic,
     stopOminousMusic,
+    startEtherealMusic,
+    stopEtherealMusic,
     startSixSevenBossMusic,
     stopSixSevenBossMusic,
     setSixSevenCrowdChant,
