@@ -9,7 +9,7 @@ window.IslandFoundry = (() => {
   /** Belly of the Beast — 50×50 maze, camera window around the player. */
   const BELLY_COLS = 50;
   const BELLY_ROWS = 50;
-  const BELLY_LAYOUT_VERSION = 3;
+  const BELLY_LAYOUT_VERSION = 4;
   const BELLY_VIEW_RADIUS = 7;
   const BELLY_CORE_X = 25;
   const BELLY_CORE_Y = 25;
@@ -562,21 +562,22 @@ window.IslandFoundry = (() => {
     }
 
     paint(25, 16, ".");
-    paint(25, 34, ".");
-    paint(16, 25, ".");
-    paint(34, 25, ".");
     paint(25, 15, ".");
+    paint(25, 14, ".");
+    paint(25, 34, ".");
     paint(25, 35, ".");
+    paint(25, 36, ".");
+    paint(16, 25, ".");
     paint(15, 25, ".");
+    paint(14, 25, ".");
+    paint(34, 25, ".");
     paint(35, 25, ".");
+    paint(36, 25, ".");
 
-    const cells = [];
+    const cellSet = new Set();
     for (let y = 2; y < H - 2; y += 2) {
       for (let x = 2; x < W - 2; x += 2) {
-        if (isBellyOuterBand(x, y)) {
-          paint(x, y, ".");
-          cells.push([x, y]);
-        }
+        if (isBellyOuterBand(x, y)) cellSet.add(`${x},${y}`);
       }
     }
 
@@ -586,31 +587,44 @@ window.IslandFoundry = (() => {
       [-2, 0],
       [2, 0],
     ];
+    const seeds = [
+      [24, 14],
+      [26, 14],
+      [14, 24],
+      [14, 26],
+      [24, 36],
+      [26, 36],
+      [36, 24],
+      [36, 26],
+    ];
     const visited = new Set();
-    if (cells.length) {
-      const start = cells[Math.floor(rnd() * cells.length)];
-      const stack = [start];
-      visited.add(`${start[0]},${start[1]}`);
-      while (stack.length) {
-        const [x, y] = stack[stack.length - 1];
-        const nbs = [];
-        for (const [dx, dy] of dirs) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (!isBellyOuterBand(nx, ny)) continue;
-          if (visited.has(`${nx},${ny}`)) continue;
-          if (g[ny]?.[nx] !== ".") continue;
-          nbs.push([nx, ny, x + dx / 2, y + dy / 2]);
-        }
-        if (!nbs.length) {
-          stack.pop();
-          continue;
-        }
-        const pick = nbs[Math.floor(rnd() * nbs.length)];
-        paint(pick[2], pick[3], ".");
-        visited.add(`${pick[0]},${pick[1]}`);
-        stack.push([pick[0], pick[1]]);
+    const stack = [];
+    for (const seed of seeds) {
+      const key = `${seed[0]},${seed[1]}`;
+      if (!cellSet.has(key) || visited.has(key)) continue;
+      paint(seed[0], seed[1], ".");
+      visited.add(key);
+      stack.push(seed);
+    }
+    while (stack.length) {
+      const [x, y] = stack[stack.length - 1];
+      const nbs = [];
+      for (const [dx, dy] of dirs) {
+        const nx = x + dx;
+        const ny = y + dy;
+        const key = `${nx},${ny}`;
+        if (!cellSet.has(key) || visited.has(key)) continue;
+        nbs.push([nx, ny, x + dx / 2, y + dy / 2]);
       }
+      if (!nbs.length) {
+        stack.pop();
+        continue;
+      }
+      const pick = nbs[Math.floor(rnd() * nbs.length)];
+      paint(pick[2], pick[3], ".");
+      paint(pick[0], pick[1], ".");
+      visited.add(`${pick[0]},${pick[1]}`);
+      stack.push([pick[0], pick[1]]);
     }
 
     for (let y = 35; y <= 48; y++) paint(25, y, ".");
@@ -619,6 +633,35 @@ window.IslandFoundry = (() => {
     paint(24, 49, "E");
     paint(25, 49, "E");
 
+    paint(BELLY_CORE_X, BELLY_CORE_Y, "C");
+
+    const walkable = (ch) => Boolean(ch) && ch !== "#";
+    const reach = new Set();
+    const flood = [[BELLY_CORE_X, BELLY_CORE_Y]];
+    reach.add(`${BELLY_CORE_X},${BELLY_CORE_Y}`);
+    const step = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ];
+    for (let i = 0; i < flood.length; i += 1) {
+      const [x, y] = flood[i];
+      for (const [dx, dy] of step) {
+        const nx = x + dx;
+        const ny = y + dy;
+        const key = `${nx},${ny}`;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        if (!walkable(g[ny][nx]) || reach.has(key)) continue;
+        reach.add(key);
+        flood.push([nx, ny]);
+      }
+    }
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < W; x += 1) {
+        if (walkable(g[y][x]) && !reach.has(`${x},${y}`)) paint(x, y, "#");
+      }
+    }
     paint(BELLY_CORE_X, BELLY_CORE_Y, "C");
     return g;
   }
@@ -678,6 +721,7 @@ window.IslandFoundry = (() => {
       heads: [],
       tentacles: [],
       crystals: [],
+      crystalsSeeded: false,
       shots: [],
     };
   }
@@ -716,10 +760,13 @@ window.IslandFoundry = (() => {
         : t
     );
     if (!Array.isArray(fight.crystals)) fight.crystals = [];
+    if (fight.crystals.length) fight.crystalsSeeded = true;
     if (
       fight.strikes === 3 &&
       fight.tentacles.length &&
       !fight.crystals.length &&
+      !fight.crystalsSeeded &&
+      fight.tentacles.every((t) => !t.dizzy) &&
       gameState.insideBelly
     ) {
       scatterTentacleCrystals(gameState);
@@ -872,6 +919,7 @@ window.IslandFoundry = (() => {
         });
       }
     });
+    fight.crystalsSeeded = true;
     fight._boltSig = "";
     fight._boltRoutes = [];
     fight._boltTileKeys = null;
@@ -1072,7 +1120,7 @@ window.IslandFoundry = (() => {
     fight.coreOpen = false;
     spawnBellyTainted(gameState, 10);
     knockPlayerFromBellyCore(gameState);
-    setToast(gameState, "First phase! Tentacles lash out — 10 tainted monsters rise.");
+    setToast(gameState, "First phase! 10 tainted monsters rise.");
     speakAda(gameState, "witherStormBellyPhase1");
   }
 
