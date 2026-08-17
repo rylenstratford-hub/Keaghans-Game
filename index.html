@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Space+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="css/styles.css?v=20260814e" />
+    <link rel="stylesheet" href="css/styles.css?v=20260816y" />
   </head>
   <body>
     <div class="atmosphere" aria-hidden="true">
@@ -186,7 +186,7 @@
 
           <article class="update-card">
             <h3 class="update-card__title">Workroom Crafting</h3>
-            <p class="update-card__copy">3×3 recipes — shape the grid, take the result.</p>
+            <p class="update-card__copy">3×3 recipes — flip the left lever down to swap in the smelter.</p>
             <div class="update-card__pics update-card__pics--single">
               <figure class="update-card__fig">
                 <div class="update-preview update-preview--panel" aria-hidden="true">
@@ -388,6 +388,12 @@
           <section class="world-panel" aria-label="Island">
             <div class="world-stage">
               <div id="world-grid" class="world-grid" role="grid" aria-label="Resource island"></div>
+              <svg
+                id="belly-crystal-bolts"
+                class="belly-crystal-bolts"
+                hidden
+                aria-hidden="true"
+              ></svg>
               <div id="fpv-view" class="fpv" hidden aria-hidden="true">
                 <div class="fpv__sky" id="fpv-sky"></div>
                 <div class="fpv__scene">
@@ -423,6 +429,14 @@
 
           <aside class="side-panels">
             <div class="clock-hunger">
+              <aside
+                id="world-minimap"
+                class="world-minimap"
+                aria-label="Map"
+                title="Map"
+              >
+                <canvas id="world-minimap-canvas" width="150" height="150"></canvas>
+              </aside>
               <div class="clock-hunger__stack">
                 <section class="day-clock" aria-label="Day and night clock">
                   <div class="day-clock__dial" role="img" aria-labelledby="clock-time">
@@ -597,11 +611,24 @@
         <div class="smelter-panel__body generator-panel__body">
           <aside class="generator-col generator-col--lever" id="generator-lever-col" hidden aria-label="Outage reset">
             <h3>Outage</h3>
-            <div class="outage-lever" id="outage-lever" aria-label="Slide switch up to ON to restore power">
+            <div class="outage-lever mech-lever" id="outage-lever" aria-label="Slide switch up to ON to restore power">
               <div class="outage-lever__rail">
                 <span class="outage-lever__mark outage-lever__mark--up">ON</span>
-                <div class="outage-lever__track">
-                  <div class="outage-lever__handle" id="outage-lever-handle" tabindex="0" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Power switch — bottom OFF, top ON"></div>
+                <div class="outage-lever__track mech-lever__track">
+                  <span class="mech-lever__bar" aria-hidden="true"></span>
+                  <div
+                    class="outage-lever__handle mech-lever__handle"
+                    id="outage-lever-handle"
+                    tabindex="0"
+                    role="slider"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow="0"
+                    aria-label="Power switch — bottom OFF, top ON"
+                  >
+                    <span class="mech-lever__line mech-lever__line--left" aria-hidden="true"></span>
+                    <span class="mech-lever__line mech-lever__line--right" aria-hidden="true"></span>
+                  </div>
                 </div>
                 <span class="outage-lever__mark outage-lever__mark--down">OFF</span>
               </div>
@@ -810,28 +837,141 @@
           </button>
         </header>
 
-        <div class="craft-station-body craft-station-body--no-list craft-station-body--table">
-          <section class="craft-station-col craft-station-col--grid" aria-label="Crafting grid">
-            <h3>3×3 Craft</h3>
-            <div class="craft-bench">
-              <div id="table-craft-grid" class="craft-grid craft-grid--3" aria-label="3 by 3 crafting grid"></div>
-              <span class="craft-bench__arrow" aria-hidden="true">→</span>
-              <button
-                type="button"
-                id="table-craft-result"
-                class="smelter-slot craft-result-slot is-empty"
-                disabled
-                title="Crafted result"
-              ></button>
+        <div class="craft-station-body craft-station-body--no-list craft-station-body--table craft-station-body--workroom">
+          <section class="craft-station-col craft-station-col--grid workroom-stage-col" aria-label="Workroom station">
+            <div class="workroom-stage">
+              <aside class="workroom-lever-col" aria-label="Station switch">
+                <div class="mech-lever workroom-lever is-craft" id="workroom-lever">
+                  <span class="mech-lever__mark workroom-lever__mark workroom-lever__mark--up">Craft</span>
+                  <div class="mech-lever__housing">
+                    <div class="mech-lever__track workroom-lever__track" id="workroom-lever-track">
+                      <span class="mech-lever__bar" aria-hidden="true"></span>
+                      <button
+                        type="button"
+                        class="mech-lever__handle workroom-lever__handle"
+                        id="workroom-lever-handle"
+                        role="slider"
+                        tabindex="0"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="100"
+                        aria-valuetext="Craft"
+                        aria-label="Workroom lever — up for crafting, down for smelting"
+                      >
+                        <span class="mech-lever__line mech-lever__line--left" aria-hidden="true"></span>
+                        <span class="mech-lever__line mech-lever__line--right" aria-hidden="true"></span>
+                      </button>
+                    </div>
+                    <div class="mech-lever__taps" aria-hidden="true">
+                      <span class="mech-lever__tap mech-lever__tap--up"></span>
+                      <span class="mech-lever__tap mech-lever__tap--down"></span>
+                    </div>
+                  </div>
+                  <span class="mech-lever__mark workroom-lever__mark workroom-lever__mark--down">Smelt</span>
+                </div>
+              </aside>
+              <div class="workroom-hookup" aria-hidden="true">
+                <svg class="workroom-hookup__wires" viewBox="0 0 80 240" preserveAspectRatio="none">
+                  <path
+                    class="workroom-wire workroom-wire--craft"
+                    d="M4 52 C 28 52 44 58 76 64"
+                    fill="none"
+                  />
+                  <path
+                    class="workroom-wire workroom-wire--smelt"
+                    d="M4 188 C 28 188 44 182 76 176"
+                    fill="none"
+                  />
+                </svg>
+                <div class="workroom-plugs">
+                  <div class="workroom-plug workroom-plug--craft" title="Craft circuit">
+                    <span class="workroom-plug__pin"></span>
+                  </div>
+                  <div class="workroom-plug workroom-plug--smelt" title="Smelt circuit">
+                    <span class="workroom-plug__pin"></span>
+                  </div>
+                </div>
+              </div>
+              <div class="workroom-well is-craft" id="workroom-well">
+              <div class="workroom-steam workroom-steam--left" aria-hidden="true">
+                <span class="workroom-steam__puff"></span>
+                <span class="workroom-steam__puff"></span>
+                <span class="workroom-steam__puff"></span>
+              </div>
+              <div class="workroom-steam workroom-steam--right" aria-hidden="true">
+                <span class="workroom-steam__puff"></span>
+                <span class="workroom-steam__puff"></span>
+                <span class="workroom-steam__puff"></span>
+              </div>
+              <div class="workroom-platform" id="workroom-platform">
+                  <div class="workroom-deck workroom-deck--craft" id="workroom-deck-craft">
+                    <h3>3×3 Craft</h3>
+                    <div class="craft-bench">
+                      <div id="table-craft-grid" class="craft-grid craft-grid--3" aria-label="3 by 3 crafting grid"></div>
+                      <span class="craft-bench__arrow" aria-hidden="true">→</span>
+                      <button
+                        type="button"
+                        id="table-craft-result"
+                        class="smelter-slot craft-result-slot is-empty"
+                        disabled
+                        title="Crafted result"
+                      ></button>
+                    </div>
+                    <p class="smelter-hint">
+                      Press <strong>E</strong> for hand + table + machine recipes, then click one to
+                      arrange. Wrong shape = no craft. Click the result when it appears.
+                    </p>
+                  </div>
+
+                  <div class="workroom-deck workroom-deck--smelt" id="workroom-deck-smelt">
+                    <div class="workroom-smelt" aria-label="Smelting">
+                      <section class="smelter-col smelter-col--input" aria-label="Input">
+                        <h3>Input</h3>
+                        <div id="workroom-smelter-input-grid" class="smelter-grid smelter-grid--input"></div>
+                      </section>
+                      <section class="smelter-col smelter-col--mid" aria-label="Smelting">
+                        <h3>Progress</h3>
+                        <div class="smelter-progress">
+                          <div id="workroom-smelter-progress-bar" class="smelter-progress__bar"></div>
+                        </div>
+                        <p id="workroom-smelter-progress-label" class="smelter-progress__label">No recipe</p>
+                        <p id="workroom-smelter-progress-time" class="smelter-progress__time">—</p>
+                      </section>
+                      <section class="smelter-col smelter-col--right" aria-label="Output and fuel">
+                        <div class="smelter-block">
+                          <h3>Output</h3>
+                          <div id="workroom-smelter-output-grid" class="smelter-grid smelter-grid--out"></div>
+                        </div>
+                        <div class="smelter-block smelter-block--fuel">
+                          <h3>Fuel</h3>
+                          <div class="smelter-fuel-row">
+                            <div class="smelter-energy" title="Stored heat energy">
+                              <span class="smelter-energy__label">Energy</span>
+                              <div class="smelter-energy__track">
+                                <div id="workroom-smelter-energy-bar" class="smelter-energy__bar"></div>
+                              </div>
+                              <span id="workroom-smelter-energy-value" class="smelter-energy__value">0</span>
+                            </div>
+                            <button
+                              type="button"
+                              id="workroom-smelter-fuel-slot"
+                              class="smelter-slot"
+                              data-smelter-slot="fuel"
+                              title="Fuel — Log, Planks, or Coal"
+                            ></button>
+                          </div>
+                          <p class="smelter-hint">Burn Log / Planks / Coal (15 / 5 / 20). Empty fuel heat resets progress.</p>
+                        </div>
+                      </section>
+                    </div>
+                  </div>
+              </div>
             </div>
-            <p class="smelter-hint">
-              Press <strong>E</strong> for hand + table + machine recipes, then click one to
-              arrange. Wrong shape = no craft. Click the result when it appears.
-            </p>
+            </div>
           </section>
           <div id="craft-table-list" class="craft-list" hidden></div>
 
-          <section class="craft-station-col craft-station-col--inv" aria-label="Inventory">
+          <section class="craft-station-col craft-station-col--inv" aria-label="Inventory" data-smelter-drop="inv">
             <h3>Inventory</h3>
             <div class="craft-inv-body">
               <div id="craft-table-inv-grid" class="smelter-grid craft-inv-grid"></div>
@@ -1012,6 +1152,39 @@
           <button type="button" class="pause-btn pause-btn--leave" data-base-enter="cancel">
             Stay outside
           </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="note-modal" class="smelter-modal note-modal" hidden>
+      <div class="smelter-modal__backdrop" data-note-close></div>
+      <div
+        class="note-sheet"
+        id="note-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="note-title"
+        data-corrupt="0"
+      >
+        <header class="note-sheet__head">
+          <h2 id="note-title">Strange Note</h2>
+          <button type="button" class="note-sheet__close" data-note-close aria-label="Close note">
+            Close
+          </button>
+        </header>
+        <div id="note-letter" class="note-sheet__letter">
+          <p>welcome, stranger. you have collected a note, not any ordanary note.</p>
+          <p>the note would also track how close you are to the realm of the 6-7s.</p>
+          <p>this note is also a 1-time use until it's no longer used as a note.</p>
+          <p>if you read this, it's now time for a good o' bye.</p>
+        </div>
+        <div id="note-tracker" class="note-sheet__tracker" hidden>
+          <p class="note-sheet__realm">Realm of the 6-7s</p>
+          <div class="note-sheet__bar" aria-hidden="true">
+            <div id="note-tracker-fill" class="note-sheet__fill"></div>
+          </div>
+          <p id="note-tracker-pct" class="note-sheet__pct">0%</p>
+          <p id="note-tracker-hint" class="note-sheet__hint"></p>
         </div>
       </div>
     </div>
@@ -1257,7 +1430,7 @@
                 </div>
 
                 <div class="tv-forbidden__lock" id="tv-forbidden-lock">
-                  <p class="tv-forbidden__lock-title">Passcode</p>
+                  <p class="tv-forbidden__lock-title">storage...</p>
                   <div id="tv-forbidden-code" class="tv-forbidden__code" aria-live="polite">••••</div>
                   <div class="tv-forbidden__keys" role="group" aria-label="Passcode keypad">
                     <button type="button" class="tv-forbidden__key" data-tv-key="1">1</button>
@@ -1435,6 +1608,39 @@
 
     <!-- Mounted last on body (outside .app) so nothing can sit above it in paint order.
          Fixed + z-index 9999 + pointer-events auto on the button = reliable hit-testing. -->
+    <div class="realm-chrome" id="realm-chrome" hidden>
+      <button
+        type="button"
+        class="realm-hud"
+        id="realm-hud"
+        title="6-7 tracker — click to open the note"
+        aria-label="6-7 tracker"
+      >
+        <span class="realm-hud__icon" id="realm-hud-icon" aria-hidden="true">📟</span>
+        <span class="realm-hud__copy">
+          <span class="realm-hud__name" id="realm-hud-name">6-7 Tracker</span>
+          <span class="realm-hud__bar" aria-hidden="true">
+            <span class="realm-hud__fill" id="realm-hud-fill"></span>
+          </span>
+        </span>
+        <span class="realm-hud__pct" id="realm-hud-pct">0%</span>
+      </button>
+    </div>
+
+    <div class="storm-chrome" id="storm-chrome" hidden>
+      <div class="storm-hud" id="storm-hud" data-six-seven-skip title="Wither Storm">
+        <span class="storm-hud__tears" aria-hidden="true"></span>
+        <span class="storm-hud__icon" id="storm-hud-icon" aria-hidden="true">💀</span>
+        <span class="storm-hud__copy">
+          <span class="storm-hud__name" id="storm-hud-name">Wither Storm</span>
+          <span class="storm-hud__bar" aria-hidden="true">
+            <span class="storm-hud__fill" id="storm-hud-fill"></span>
+          </span>
+        </span>
+        <span class="storm-hud__hp" id="storm-hud-hp">—</span>
+      </div>
+    </div>
+
     <div class="profile-chrome" id="profile-chrome">
       <button
         type="button"
@@ -1515,6 +1721,7 @@
 
     <!-- Full-viewport damage vignette (outside .app so nothing clips it). -->
     <div id="damage-flash" class="damage-flash" aria-hidden="true"></div>
+    <div id="belly-whiteout" class="belly-whiteout" hidden aria-hidden="true"></div>
 
     <!-- Post–6-7 TV blackout: cursed swarm + 16×16 boss arena. -->
     <div id="six-seven-arena" class="six-seven-arena" hidden aria-hidden="true">
@@ -1533,10 +1740,10 @@
       <div id="six-seven-arena-whiteout" class="six-seven-arena__whiteout" hidden aria-hidden="true"></div>
     </div>
 
-    <script src="js/data.js?v=20260814e" defer></script>
-    <script src="js/sfx.js?v=20260814e" defer></script>
-    <script src="js/game.js?v=20260814e" defer></script>
-    <script src="js/main.js?v=20260814e" defer></script>
+    <script src="js/data.js?v=20260816y" defer></script>
+    <script src="js/sfx.js?v=20260816y" defer></script>
+    <script src="js/game.js?v=20260816y" defer></script>
+    <script src="js/main.js?v=20260816y" defer></script>
   <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"a6d24ae9b9e349cc94bcb7dd3ded9822","r":1}' crossorigin="anonymous"></script>
 </body>
 </html>

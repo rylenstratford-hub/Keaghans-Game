@@ -2902,27 +2902,74 @@ window.KeaghanSfx = (() => {
     }
   }
 
+  /** One person talking — two-syllable "six / seven" bed that can stack. */
+  function playCrowdTalker(audio, out, t, delay) {
+    const now = audio.currentTime + delay;
+    const dur = 0.2 + Math.random() * 0.34;
+    const f0 = 85 + Math.random() * 240;
+    const osc = audio.createOscillator();
+    osc.type = Math.random() < 0.5 ? "sawtooth" : "square";
+    osc.frequency.setValueAtTime(f0, now);
+    osc.frequency.setValueAtTime(f0 * (0.92 + Math.random() * 0.08), now + dur * 0.28);
+    osc.frequency.setValueAtTime(f0 * (1.08 + Math.random() * 0.22), now + dur * 0.52);
+
+    const formant = audio.createBiquadFilter();
+    formant.type = "bandpass";
+    formant.Q.value = 2.4 + Math.random() * 3.2;
+    formant.frequency.setValueAtTime(420 + Math.random() * 380, now);
+    formant.frequency.setValueAtTime(780 + Math.random() * 640, now + dur * 0.45);
+
+    const air = audio.createBiquadFilter();
+    air.type = "highpass";
+    air.frequency.value = 180 + Math.random() * 90;
+
+    const g = audio.createGain();
+    const amp = 0.035 + t * 0.11 + Math.random() * 0.04 * t;
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(amp, now + 0.018);
+    g.gain.exponentialRampToValueAtTime(amp * 0.7, now + dur * 0.55);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+
+    osc.connect(formant);
+    formant.connect(air);
+    air.connect(g);
+    g.connect(out);
+    osc.start(now);
+    osc.stop(now + dur + 0.03);
+  }
+
   function playSixSevenCrowdBurst() {
-    if (!sixSevenCrowd.active || !window.speechSynthesis) return;
+    if (!sixSevenCrowd.active) return;
     const t = Math.max(0, Math.min(1, sixSevenCrowd.intensity || 0));
     if (t <= 0.02) return;
+
+    const audio = ensureCtx();
+    const out = audio ? makeOut(audio, 0.38 + t * 0.42) : null;
+    if (out) {
+      // SpeechSynthesis queues — these talkers actually overlap.
+      const talkers = Math.max(1, Math.round(1 + t * 16 + Math.random() * (1 + t * 6)));
+      const windowSec = Math.max(0.04, 0.42 - t * 0.34);
+      for (let i = 0; i < talkers; i++) {
+        playCrowdTalker(audio, out, t, Math.random() * windowSec);
+      }
+    }
+
+    if (!window.speechSynthesis) return;
     const phrases = ["6-7!", "six seven!", "6 7!", "SIX SEVEN!", "six! seven!", "6-7!"];
     const voices = window.speechSynthesis.getVoices?.() || [];
-    // Sparse early → a mob at full intensity.
-    const count = Math.max(1, Math.round(1 + t * 13 + Math.random() * (1 + t * 4)));
-    for (let i = 0; i < count; i++) {
+    const spoken = Math.max(0, Math.round(t * 4 + Math.random() * t * 2));
+    for (let i = 0; i < spoken; i++) {
       const utter = new SpeechSynthesisUtterance(phrases[i % phrases.length]);
-      utter.rate = 0.85 + Math.random() * 0.75;
+      utter.rate = 0.9 + Math.random() * 0.7;
       utter.pitch = 0.35 + Math.random() * 1.55;
       utter.volume = Math.max(
-        0.08,
-        Math.min(1, masterGain() * (0.12 + t * 0.55 + Math.random() * 0.3 * t))
+        0.06,
+        Math.min(1, masterGain() * (0.1 + t * 0.45 + Math.random() * 0.22 * t))
       );
       if (voices.length) {
         utter.voice = voices[Math.floor(Math.random() * voices.length)];
       }
-      // Tighter overlap as the crowd grows.
-      const delay = i * (18 + Math.random() * (55 - t * 25));
+      const delay = i * (6 + (1 - t) * 28);
       window.setTimeout(() => {
         if (!sixSevenCrowd.active) return;
         try {
@@ -2957,8 +3004,8 @@ window.KeaghanSfx = (() => {
 
     if (!wasActive) playSixSevenCrowdBurst();
 
-    // Closer to the finale → bursts stack faster.
-    const gap = Math.round(1650 - next * 1150); // ~1650ms → ~500ms
+    // Closer to 6-7 → bursts stack on top of each other.
+    const gap = Math.round(1500 - next * 1180); // ~1500ms → ~320ms
     if (!sixSevenCrowd.timer || Math.abs(gap - sixSevenCrowd.gapMs) > 60) {
       if (sixSevenCrowd.timer) {
         window.clearInterval(sixSevenCrowd.timer);

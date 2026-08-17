@@ -11,6 +11,9 @@ const SETTINGS_KEY = "keaghans-game-settings";
 const PROFILES_KEY = "keaghans-game-profiles-v1";
 const SIX_SEVEN_MOD_KEY = "keaghans-game-six-seven-mod";
 const SIX_SEVEN_UNLOCK_KEY = "keaghans-game-six-seven-mod-unlocked";
+const WITHER_STORM_MOD_KEY = "keaghans-game-wither-storm-mod";
+const WITHER_STORM_UNLOCK_KEY = "keaghans-game-wither-storm-mod-unlocked";
+const INVINCIBLE_MOD_KEY = "keaghans-game-invincible-mod";
 const MAX_PROFILES = 100;
 const NAME_MAX = 24;
 const SLOT_COUNT = window.IslandFoundry?.SLOT_COUNT ?? 5;
@@ -334,6 +337,30 @@ function isSixSevenModUnlocked() {
   }
 }
 
+function isWitherStormModInstalled() {
+  try {
+    return localStorage.getItem(WITHER_STORM_MOD_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function isWitherStormModUnlocked() {
+  try {
+    return localStorage.getItem(WITHER_STORM_UNLOCK_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function isInvincibleModInstalled() {
+  try {
+    return localStorage.getItem(INVINCIBLE_MOD_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 const BRAND_DEFAULTS = {
   eyebrow: "Craft · Automate · Explore",
   title: "Satisfactory-Craft",
@@ -502,6 +529,8 @@ function unlockSixSevenMod() {
   } catch {
     /* ignore */
   }
+  window.IslandFoundry?.onSixSevenNoteUnlockChanged?.();
+  renderModLists();
 }
 
 function installSixSevenMod() {
@@ -512,12 +541,61 @@ function installSixSevenMod() {
     /* ignore */
   }
   applySixSevenModPresentation();
+  window.IslandFoundry?.onSixSevenNoteUnlockChanged?.();
 }
 
 /** Only way to revert 6-7: remove it from Installed mods (stays unlocked). */
 function uninstallSixSevenMod() {
   try {
     localStorage.removeItem(SIX_SEVEN_MOD_KEY);
+  } catch {
+    /* ignore */
+  }
+  applySixSevenModPresentation();
+}
+
+function unlockWitherStormMod() {
+  try {
+    localStorage.setItem(WITHER_STORM_UNLOCK_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+  renderModLists();
+}
+
+function installWitherStormMod() {
+  try {
+    localStorage.setItem(WITHER_STORM_MOD_KEY, "1");
+    localStorage.setItem(WITHER_STORM_UNLOCK_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+  applySixSevenModPresentation();
+  window.IslandFoundry?.onWitherStormModChanged?.();
+}
+
+function uninstallWitherStormMod() {
+  try {
+    localStorage.removeItem(WITHER_STORM_MOD_KEY);
+  } catch {
+    /* ignore */
+  }
+  applySixSevenModPresentation();
+  window.IslandFoundry?.onWitherStormModChanged?.();
+}
+
+function installInvincibleMod() {
+  try {
+    localStorage.setItem(INVINCIBLE_MOD_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+  applySixSevenModPresentation();
+}
+
+function uninstallInvincibleMod() {
+  try {
+    localStorage.removeItem(INVINCIBLE_MOD_KEY);
   } catch {
     /* ignore */
   }
@@ -568,10 +646,15 @@ function resetMods() {
   try {
     localStorage.removeItem(SIX_SEVEN_MOD_KEY);
     localStorage.removeItem(SIX_SEVEN_UNLOCK_KEY);
+    localStorage.removeItem(WITHER_STORM_MOD_KEY);
+    localStorage.removeItem(WITHER_STORM_UNLOCK_KEY);
+    localStorage.removeItem(INVINCIBLE_MOD_KEY);
   } catch {
     /* ignore */
   }
   applySixSevenModPresentation();
+  window.IslandFoundry?.onWitherStormModChanged?.();
+  window.IslandFoundry?.onSixSevenNoteUnlockChanged?.();
 }
 
 /** Wipe profiles, saves, settings, and mod flags — full clean slate. */
@@ -594,6 +677,9 @@ function resetEverything() {
       localStorage.removeItem(PROFILES_KEY);
       localStorage.removeItem(SIX_SEVEN_MOD_KEY);
       localStorage.removeItem(SIX_SEVEN_UNLOCK_KEY);
+      localStorage.removeItem(WITHER_STORM_MOD_KEY);
+      localStorage.removeItem(WITHER_STORM_UNLOCK_KEY);
+      localStorage.removeItem(INVINCIBLE_MOD_KEY);
     } catch {
       /* ignore */
     }
@@ -614,6 +700,9 @@ function renderModLists() {
 
   const sixSevenOn = isSixSevenModInstalled();
   const sixSevenUnlocked = isSixSevenModUnlocked();
+  const witherOn = isWitherStormModInstalled();
+  const witherUnlocked = isWitherStormModUnlocked();
+  const invincibleOn = isInvincibleModInstalled();
 
   if (modTitle) modTitle.textContent = "Mods";
   if (modCopy) {
@@ -621,8 +710,9 @@ function renderModLists() {
       "Installed on the left, available on the right. Remove from Installed to revert. Hidden mods stay ??? until unlocked.";
   }
 
+  const installedCards = [];
   if (sixSevenOn) {
-    installed.innerHTML = `
+    installedCards.push(`
       <li class="mod-card--six-seven">
         <strong>6-7 Mod</strong>
         <span class="mod-list__tag is-locked">Installed</span>
@@ -631,10 +721,35 @@ function renderModLists() {
           Remove
         </button>
       </li>
-    `;
-  } else {
-    installed.innerHTML = `<li class="mod-list__empty">No mods installed yet.</li>`;
+    `);
   }
+  if (witherOn) {
+    installedCards.push(`
+      <li class="mod-card--wither-storm">
+        <strong>Wither Storm</strong>
+        <span class="mod-list__tag is-locked">Installed</span>
+        <p class="mod-card__note">A growing command-block storm eats the island. Its core pulls everything in. At 300 HP a hole opens — walk in. Base is safe. Remove to banish it.</p>
+        <button type="button" class="mod-remove-btn" data-mod-remove="wither-storm">
+          Remove
+        </button>
+      </li>
+    `);
+  }
+  if (invincibleOn) {
+    installedCards.push(`
+      <li class="mod-card--invincible">
+        <strong>Invincible Mode: On</strong>
+        <span class="mod-list__tag is-locked">Installed</span>
+        <p class="mod-card__note">You take no damage from anything — including the Wither Storm. Free companion mod. Remove to turn off.</p>
+        <button type="button" class="mod-remove-btn" data-mod-remove="invincible">
+          Remove
+        </button>
+      </li>
+    `);
+  }
+  installed.innerHTML = installedCards.length
+    ? installedCards.join("")
+    : `<li class="mod-list__empty">No mods installed yet.</li>`;
 
   const soon = [
     ["Custom crafting recipes", "Soon"],
@@ -671,6 +786,43 @@ function renderModLists() {
       `;
     }
   }
+
+  // Wither Storm: hidden until every advancement, easter egg, and completable mod is done.
+  if (!witherOn) {
+    if (witherUnlocked) {
+      availableHtml += `
+        <li class="mod-card--wither-storm">
+          <strong>Wither Storm</strong>
+          <span class="mod-list__tag">Unlocked</span>
+          <p class="mod-card__note">Install to summon a growing command-block wither. Its core pulls everything. At 300 HP a hole opens to the Belly of the Beast.</p>
+          <button type="button" class="mod-install-btn" data-mod-install="wither-storm">
+            Install
+          </button>
+        </li>
+      `;
+    } else {
+      availableHtml += `
+        <li class="mod-card--wither-storm">
+          <strong>???</strong>
+          <span class="mod-list__tag">Hidden</span>
+          <p class="mod-card__note">Finish every advancement, easter egg, and mod…</p>
+        </li>
+      `;
+    }
+  }
+
+  if ((witherOn || witherUnlocked) && !invincibleOn) {
+    availableHtml += `
+      <li class="mod-card--invincible">
+        <strong>Invincible Mode: On</strong>
+        <span class="mod-list__tag">Free</span>
+        <p class="mod-card__note">Take no damage from anything, including the Wither Storm. Install to turn it on.</p>
+        <button type="button" class="mod-install-btn" data-mod-install="invincible">
+          Install
+        </button>
+      </li>
+    `;
+  }
   available.innerHTML = availableHtml;
 }
 
@@ -678,6 +830,8 @@ function renderModLists() {
 function applySixSevenModPresentation() {
   const on = isSixSevenModInstalled();
   document.body.classList.toggle("is-six-seven-mod", on);
+  document.body.classList.toggle("is-wither-storm-mod", isWitherStormModInstalled());
+  document.body.classList.toggle("is-invincible-mod", isInvincibleModInstalled());
 
   // When removing the mod, put canonical brand copy back before the restore walk.
   if (!on) {
@@ -733,6 +887,15 @@ window.KeaghanApp = {
   unlockSixSevenMod,
   installSixSevenMod,
   uninstallSixSevenMod,
+  isWitherStormModInstalled,
+  isWitherStormModUnlocked,
+  unlockWitherStormMod,
+  installWitherStormMod,
+  uninstallWitherStormMod,
+  isInvincibleModInstalled,
+  installInvincibleMod,
+  uninstallInvincibleMod,
+  refreshModLists: renderModLists,
   promptResetEverything,
   resetEverything,
   promptResetMods,
@@ -742,6 +905,7 @@ window.KeaghanApp = {
   finishSixSevenDoorEscape() {
     unlockSixSevenMod();
     installSixSevenMod();
+    window.IslandFoundry?.maybeUnlockWitherStormMod?.();
     showScreen("title");
   },
 };
@@ -884,6 +1048,12 @@ function bindModUi() {
       if (id === "six-seven") {
         playMenuClick();
         uninstallSixSevenMod();
+      } else if (id === "wither-storm") {
+        playMenuClick();
+        uninstallWitherStormMod();
+      } else if (id === "invincible") {
+        playMenuClick();
+        uninstallInvincibleMod();
       }
       return;
     }
@@ -893,6 +1063,12 @@ function bindModUi() {
       if (id === "six-seven" && isSixSevenModUnlocked()) {
         playMenuClick();
         installSixSevenMod();
+      } else if (id === "wither-storm" && isWitherStormModUnlocked()) {
+        playMenuClick();
+        installWitherStormMod();
+      } else if (id === "invincible" && (isWitherStormModUnlocked() || isWitherStormModInstalled())) {
+        playMenuClick();
+        installInvincibleMod();
       }
     }
   });

@@ -88,6 +88,12 @@ window.GameData = {
       icon: "🌑",
       color: "#2a2420",
     },
+    strangeNote: {
+      id: "strangeNote",
+      name: "Strange Note",
+      icon: "📜",
+      color: "#c4a06a",
+    },
   },
 
   /** Ice (portable) + Fan (powered building) cooling. */
@@ -197,6 +203,10 @@ window.GameData = {
       how: "Smelt a Log in a Smelter — takes 5 in-game minutes (needs fuel or power).",
       uses: "Seats in the living-room TV hatch after you crack the hidden cipher.",
     },
+    strangeNote: {
+      how: "Lying in the middle of the Base hall. Click it to pick it up.",
+      uses: "Click it in Tab inventory to read it once. After that it tracks how close you are to the realm of the 6-7s.",
+    },
     ironIngot: {
       how: "Smelt Iron Ore in a Smelter with fuel (Log, Planks, or Coal).",
       uses: "Craft Gears, Iron Buckets, and Iron Picks; build Drills, Generators, Fans, and Power Poles (Q).",
@@ -252,7 +262,7 @@ window.GameData = {
     },
     base: {
       how: "Build with Q using 50 Planks (5×3, click top-left). Upgrade inside: 30 Stone → Stone Base, then 30 Iron Ingots → Iron Base.",
-      uses: "Safe yard — monsters can't enter. Walk onto it to be asked inside (Stay outside steps you back). 10×10 indoor map: kitchen NW (click to store food — 15 slots × 50), upgrade north, living NE (click to watch TV — set loops, channels advance on their own), workroom west (click for 3×3 crafting), storage SW (click to store non-food — 15×50, not the Base Key), bedroom SE, hall elsewhere, doors east. Room doors toggle with the Base Key from the south-hall hook. Click the bedroom at night to sleep until 6:00 a.m.",
+      uses: "Safe yard — monsters can't enter. Walk onto it to be asked inside (Stay outside steps you back). 10×10 indoor map: kitchen NW (click to store food — 15 slots × 50), upgrade north, living NE (click to watch TV — set loops, channels advance on their own), workroom west (click for 3×3 crafting, or flip the left lever down to smelt), storage SW (click to store non-food — 15×50, not the Base Key), bedroom SE, hall elsewhere, doors east. Room doors toggle with the Base Key from the south-hall hook. Click the bedroom at night to sleep until 6:00 a.m.",
     },
     baseKey: {
       how: "Hangs on the key hook in the south indoor hall (🔑). Stand next to it and click to take or hang it. You must hang it back before leaving.",
@@ -608,6 +618,24 @@ window.GameData = {
         "Copper Wire fabricated. Two in a row make Cable — then you can wire the grid.",
       firstTv:
         "Recreation online. Pick loops, then slide the two channel levers. First lever on a line starts there; last lever sits one line past the final channel. Dial in exactly six and seven and that counter doubles channel speed each step. Ice-Fans is for ice lovers and Fan lovers. Leave with the corner button, or it powers down after your last channel when wraps are done.",
+      witherStormUnlock:
+        "Pioneer. A hidden module is now available. The Wither Storm — do not install it unless you are prepared to lose the island.",
+      witherStormForm:
+        "Command-block signature detected. It is inert while forming. When the reading hits five, it has awakened.",
+      witherStormAwaken:
+        "The Wither Storm has awakened at five health. Each tile it eats feeds it. The command block will bury itself as it grows.",
+      witherStormHole:
+        "The storm has torn a hole in its core. Step into it if you dare — the Belly of the Beast is waiting.",
+      witherStormBelly:
+        "The belly is a fifty-by-fifty maze. Little halls on the outside, big halls inward, and a large chamber around the command block. The halls will not harm you. Strike the core to begin its phases.",
+      witherStormBellyPhase1:
+        "First phase. Tentacles throw you out. Ten tainted monsters have risen around the core.",
+      witherStormBellyPhase2:
+        "Second phase. A mini-boss holds the chamber. It throws fire, arrows, and poison-heat magic — and it keeps releasing tainted. Nothing opens until every enemy is down.",
+      witherStormBellyPhase3:
+        "Third phase. Each tentacle is bound to three crystals scattered through the maze. Smash a tentacle's crystals and it goes dizzy — it cannot grab. The map sits left of the clock. Heads still pull, eat, and release skeletons. Nothing opens until every enemy is down.",
+      witherStormBellyVictory:
+        "The command block is breaking. Hold on.",
     },
   },
 

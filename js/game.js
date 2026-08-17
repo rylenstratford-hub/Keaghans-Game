@@ -6,10 +6,26 @@ window.IslandFoundry = (() => {
   /** Indoor base map — same size as the island, split into rooms. */
   const INTERIOR_COLS = 10;
   const INTERIOR_ROWS = 10;
+  /** Belly of the Beast — 50×50 maze, camera window around the player. */
+  const BELLY_COLS = 50;
+  const BELLY_ROWS = 50;
+  const BELLY_LAYOUT_VERSION = 3;
+  const BELLY_VIEW_RADIUS = 7;
+  const BELLY_CORE_X = 25;
+  const BELLY_CORE_Y = 25;
+  const BELLY_BOSS_HP = 100;
+  const BELLY_TAINTED_HP = 20;
+  const BELLY_HEAD_HP = 50;
+  const BELLY_TENTACLE_HP = 50;
+  const BELLY_SKELETON_HP = 20;
+  const BELLY_HEAD_SKELETON_MS = 60000;
+  const BELLY_WHITEOUT_MS = 10000;
   /** Bump when starter resource layout / terrain heightmap changes. */
   const WORLD_LAYOUT_VERSION = 5;
   /** Outdoor hills: 0 = flat, each step rises upward only. */
   const TILE_HEIGHT_MAX = 2;
+  /** Storm piles can stack higher than island hills. */
+  const WITHER_STORM_HEIGHT_MAX = 8;
   const { GameData } = window;
 
   function saveKeyFor(profileId, slot) {
@@ -266,7 +282,8 @@ window.IslandFoundry = (() => {
   function tileHeight(tile) {
     if (!tile) return 0;
     const h = Math.floor(Number(tile.height) || 0);
-    return Math.min(TILE_HEIGHT_MAX, Math.max(0, h));
+    const cap = tile.witherTorn ? WITHER_STORM_HEIGHT_MAX : TILE_HEIGHT_MAX;
+    return Math.min(cap, Math.max(0, h));
   }
 
   /**
@@ -346,8 +363,10 @@ window.IslandFoundry = (() => {
       const baseY = Math.floor(i / COLS);
       const next =
         t?.machine === "powerStation" ? { ...t, machine: "craftingStation" } : t;
+      const torn = Boolean(next?.witherTorn);
+      const heightCap = torn ? WITHER_STORM_HEIGHT_MAX : TILE_HEIGHT_MAX;
       const height = Number.isFinite(next?.height)
-        ? Math.min(TILE_HEIGHT_MAX, Math.max(0, Math.floor(next.height)))
+        ? Math.min(heightCap, Math.max(0, Math.floor(next.height)))
         : heightForIsland(baseX, baseY);
       return {
         x: baseX,
@@ -359,6 +378,7 @@ window.IslandFoundry = (() => {
         hp: Number.isFinite(next?.hp) ? next.hp : 0,
         maxHp: Number.isFinite(next?.maxHp) ? next.maxHp : 0,
         respawn: next?.respawn ?? null,
+        witherTorn: torn || undefined,
       };
     });
   }
@@ -381,6 +401,7 @@ window.IslandFoundry = (() => {
         passcode: false,
         wireRight: null,
         wireDone: [false, false, false, false],
+        opened: false,
       },
       toast: "",
       toastUntil: 0,
@@ -408,8 +429,14 @@ window.IslandFoundry = (() => {
       baseDoorLocks: {},
       // Base Key hangs on the south-hall hook when true.
       baseKeyOnHook: true,
+      // Hall note: collect once, read once, then it becomes a 6-7 tracker.
+      baseNoteCollected: false,
+      baseNoteRead: false,
       // Indoor workroom 3×3 craft grid (same recipes as a Crafting Table).
       workroomCraft: { type: "craftingStation", craftGrid: Array(9).fill(null) },
+      // Indoor workroom smelter (fuel-fired) + lever side: "craft" | "smelt".
+      workroomSmelter: makeSmelterMachine(-2, -2),
+      workroomStation: "craft",
       // Indoor kitchen pantry — food only (15×50).
       kitchenStorage: Array.from({ length: 15 }, () => null),
       // Indoor storage room — non-food, not Base Key (15×50).
@@ -419,6 +446,16 @@ window.IslandFoundry = (() => {
       adaLine: null,
       // Personal Ice cool-down remaining (in-game minutes).
       playerCoolMinutesLeft: 0,
+      // Wither Storm mod — null until installed; persists while the storm lives.
+      witherStorm: null,
+      insideBelly: false,
+      bellyTiles: null,
+      bellyFrom: null,
+      bellyLayoutVersion: 0,
+      bellyFight: null,
+      bellyHeat: 0,
+      bellyPoison: 0,
+      bellyWhiteoutAt: 0,
     };
   }
 
@@ -432,6 +469,9 @@ window.IslandFoundry = (() => {
   }
 
   function activeMapSize(gameState) {
+    if (gameState?.insideBelly) {
+      return { cols: BELLY_COLS, rows: BELLY_ROWS };
+    }
     if (gameState?.insideBase) {
       return { cols: INTERIOR_COLS, rows: INTERIOR_ROWS };
     }
@@ -439,7 +479,1031 @@ window.IslandFoundry = (() => {
   }
 
   function isInsideBase(gameState) {
-    return Boolean(gameState?.insideBase);
+    return Boolean(gameState?.insideBase) && !gameState?.insideBelly;
+  }
+
+  function isInsideBelly(gameState) {
+    return Boolean(gameState?.insideBelly);
+  }
+
+  function pickRandomBellyWalkTile(gameState) {
+    const spots = [];
+    for (const tile of gameState?.bellyTiles || []) {
+      if (!isBellyWalkable(tile)) continue;
+      if (bellyFoeAt(gameState, tile.x, tile.y)) continue;
+      spots.push(tile);
+    }
+    if (!spots.length) return bellyCorePos(gameState?.bellyTiles);
+    return spots[Math.floor(Math.random() * spots.length)];
+  }
+
+  function bellyCorePos(tiles) {
+    const core = (tiles || []).find((tile) => tile?.feature === "core");
+    return core ? { x: core.x, y: core.y } : { x: BELLY_CORE_X, y: BELLY_CORE_Y };
+  }
+
+  function mulberry32(seed) {
+    let a = seed | 0;
+    return () => {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function isBellyOuterBand(x, y) {
+    if (x <= 0 || y <= 0 || x >= BELLY_COLS - 1 || y >= BELLY_ROWS - 1) return false;
+    return x < 16 || x > 34 || y < 16 || y > 34;
+  }
+
+  /** 50×50: little halls outside, 2-wide big halls inside, large core room in the middle. */
+  function generateBellyGrid() {
+    const W = BELLY_COLS;
+    const H = BELLY_ROWS;
+    const g = Array.from({ length: H }, () => Array(W).fill("#"));
+    const rnd = mulberry32(20260816);
+
+    const paint = (x, y, ch) => {
+      if (x >= 0 && y >= 0 && x < W && y < H) g[y][x] = ch;
+    };
+
+    for (let y = 20; y <= 30; y++) {
+      for (let x = 20; x <= 30; x++) paint(x, y, "R");
+    }
+    paint(BELLY_CORE_X, BELLY_CORE_Y, "C");
+
+    for (let i = 19; i <= 31; i++) {
+      paint(i, 19, "#");
+      paint(i, 31, "#");
+      paint(19, i, "#");
+      paint(31, i, "#");
+    }
+    paint(24, 19, " ");
+    paint(25, 19, " ");
+    paint(24, 31, " ");
+    paint(25, 31, " ");
+    paint(19, 24, " ");
+    paint(19, 25, " ");
+    paint(31, 24, " ");
+    paint(31, 25, " ");
+
+    for (let y = 17; y <= 33; y++) {
+      paint(17, y, " ");
+      paint(18, y, " ");
+      paint(32, y, " ");
+      paint(33, y, " ");
+    }
+    for (let x = 17; x <= 33; x++) {
+      paint(x, 17, " ");
+      paint(x, 18, " ");
+      paint(x, 32, " ");
+      paint(x, 33, " ");
+    }
+
+    paint(25, 16, ".");
+    paint(25, 34, ".");
+    paint(16, 25, ".");
+    paint(34, 25, ".");
+    paint(25, 15, ".");
+    paint(25, 35, ".");
+    paint(15, 25, ".");
+    paint(35, 25, ".");
+
+    const cells = [];
+    for (let y = 2; y < H - 2; y += 2) {
+      for (let x = 2; x < W - 2; x += 2) {
+        if (isBellyOuterBand(x, y)) {
+          paint(x, y, ".");
+          cells.push([x, y]);
+        }
+      }
+    }
+
+    const dirs = [
+      [0, -2],
+      [0, 2],
+      [-2, 0],
+      [2, 0],
+    ];
+    const visited = new Set();
+    if (cells.length) {
+      const start = cells[Math.floor(rnd() * cells.length)];
+      const stack = [start];
+      visited.add(`${start[0]},${start[1]}`);
+      while (stack.length) {
+        const [x, y] = stack[stack.length - 1];
+        const nbs = [];
+        for (const [dx, dy] of dirs) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (!isBellyOuterBand(nx, ny)) continue;
+          if (visited.has(`${nx},${ny}`)) continue;
+          if (g[ny]?.[nx] !== ".") continue;
+          nbs.push([nx, ny, x + dx / 2, y + dy / 2]);
+        }
+        if (!nbs.length) {
+          stack.pop();
+          continue;
+        }
+        const pick = nbs[Math.floor(rnd() * nbs.length)];
+        paint(pick[2], pick[3], ".");
+        visited.add(`${pick[0]},${pick[1]}`);
+        stack.push([pick[0], pick[1]]);
+      }
+    }
+
+    for (let y = 35; y <= 48; y++) paint(25, y, ".");
+    paint(24, 48, ".");
+    paint(25, 48, ".");
+    paint(24, 49, "E");
+    paint(25, 49, "E");
+
+    paint(BELLY_CORE_X, BELLY_CORE_Y, "C");
+    return g;
+  }
+
+  function makeBellyWorld() {
+    const grid = generateBellyGrid();
+    const tiles = [];
+    for (let y = 0; y < BELLY_ROWS; y++) {
+      for (let x = 0; x < BELLY_COLS; x++) {
+        const ch = grid[y][x] || "#";
+        const exit = ch === "E";
+        const core = ch === "C";
+        const wall = ch === "#";
+        const little = ch === ".";
+        const roomFloor = ch === "R";
+        const room = exit
+          ? "exit"
+          : core
+            ? "core"
+            : wall
+              ? null
+              : little
+                ? "littleHall"
+                : roomFloor
+                  ? "coreRoom"
+                  : "bigHall";
+        tiles.push({
+          x,
+          y,
+          kind: exit ? "exit" : core ? "core" : wall ? "wall" : "floor",
+          room: room || "belly",
+          feature: exit ? "exit" : core ? "core" : null,
+          icon: exit ? "⬆" : core ? "💠" : "",
+          label: exit
+            ? "Climb out of the beast"
+            : core
+              ? "Wither Storm core"
+              : wall
+                ? "Tainted flesh"
+                : little
+                  ? "Little hall"
+                  : roomFloor
+                    ? "Core chamber"
+                    : "Big hall",
+        });
+      }
+    }
+    return tiles;
+  }
+
+  function emptyBellyFight() {
+    return {
+      strikes: 0,
+      coreOpen: true,
+      tainted: [],
+      boss: null,
+      heads: [],
+      tentacles: [],
+      crystals: [],
+      shots: [],
+    };
+  }
+
+  function ensureBellyFight(gameState) {
+    if (!gameState.bellyFight || typeof gameState.bellyFight !== "object") {
+      gameState.bellyFight = emptyBellyFight();
+    }
+    const fight = gameState.bellyFight;
+    fight.strikes = Math.max(0, Math.floor(Number(fight.strikes) || 0));
+    fight.coreOpen = fight.coreOpen !== false;
+    if (!Array.isArray(fight.tainted)) fight.tainted = [];
+    if (!Array.isArray(fight.heads)) fight.heads = [];
+    fight.heads = fight.heads.map((h) =>
+      h
+        ? {
+            ...h,
+            kind: "head",
+            hp: Math.max(1, Math.floor(Number(h.hp) || BELLY_HEAD_HP)),
+            maxHp: Math.max(BELLY_HEAD_HP, Math.floor(Number(h.maxHp) || BELLY_HEAD_HP)),
+            lastSkeletonAt: Number(h.lastSkeletonAt) || Date.now(),
+          }
+        : h
+    );
+    if (!Array.isArray(fight.tentacles)) fight.tentacles = [];
+    fight.tentacles = fight.tentacles.map((t, i) =>
+      t
+        ? {
+            ...t,
+            id: Number.isFinite(t.id) ? t.id : i,
+            kind: "tentacle",
+            hp: Math.max(1, Math.floor(Number(t.hp) || BELLY_TENTACLE_HP)),
+            maxHp: Math.max(1, Math.floor(Number(t.maxHp) || BELLY_TENTACLE_HP)),
+            dizzy: Boolean(t.dizzy),
+          }
+        : t
+    );
+    if (!Array.isArray(fight.crystals)) fight.crystals = [];
+    if (
+      fight.strikes === 3 &&
+      fight.tentacles.length &&
+      !fight.crystals.length &&
+      gameState.insideBelly
+    ) {
+      scatterTentacleCrystals(gameState);
+    }
+    if (!Array.isArray(fight.shots)) fight.shots = [];
+    return fight;
+  }
+
+  function isBellyWhiteout(gameState = state) {
+    return Boolean(gameState?.bellyWhiteoutAt);
+  }
+
+  function isBellyCoreTile(tile) {
+    return tile?.feature === "core" || tile?.kind === "core";
+  }
+
+  function isBellyCoreOpen(gameState) {
+    return ensureBellyFight(gameState).coreOpen !== false;
+  }
+
+  function inBellyCoreRoom(x, y) {
+    return x >= 20 && x <= 30 && y >= 20 && y <= 30;
+  }
+
+  function bellyFoeAt(gameState, x, y, except = null) {
+    const fight = gameState?.bellyFight;
+    if (!fight) return null;
+    if (fight.boss && fight.boss !== except && fight.boss.x === x && fight.boss.y === y) {
+      return fight.boss;
+    }
+    const head = (fight.heads || []).find((h) => h && h !== except && h.x === x && h.y === y);
+    if (head) return head;
+    const tentacle = (fight.tentacles || []).find(
+      (t) => t && t !== except && t.x === x && t.y === y
+    );
+    if (tentacle) return tentacle;
+    return (fight.tainted || []).find((m) => m && m !== except && m.x === x && m.y === y) || null;
+  }
+
+  function bellyEnemiesLeft(fight) {
+    if (!fight) return 0;
+    return (
+      (fight.tainted?.length || 0) +
+      (fight.heads?.length || 0) +
+      (fight.tentacles?.length || 0) +
+      (fight.boss ? 1 : 0)
+    );
+  }
+
+  function bellyTentacleAt(gameState, x, y) {
+    return (gameState?.bellyFight?.tentacles || []).find((t) => t && t.x === x && t.y === y) || null;
+  }
+
+  function bellyShotAt(gameState, x, y) {
+    return (gameState?.bellyFight?.shots || []).find((s) => s && s.x === x && s.y === y) || null;
+  }
+
+  function isBellyFoeWalkable(gameState, x, y, except = null) {
+    const tile = getActiveTile(gameState, x, y);
+    if (!isBellyWalkable(tile)) return false;
+    if (bellyFoeAt(gameState, x, y, except)) return false;
+    if (gameState.player && gameState.player.x === x && gameState.player.y === y) return false;
+    return true;
+  }
+
+  function pickBellySpawnTiles(gameState, count, pred) {
+    const spots = [];
+    for (let y = 1; y < BELLY_ROWS - 1; y++) {
+      for (let x = 1; x < BELLY_COLS - 1; x++) {
+        if (!pred(x, y)) continue;
+        if (!isBellyFoeWalkable(gameState, x, y)) continue;
+        spots.push({ x, y });
+      }
+    }
+    for (let i = spots.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [spots[i], spots[j]] = [spots[j], spots[i]];
+    }
+    return spots.slice(0, count);
+  }
+
+  function spawnBellySkeletonNear(gameState, head) {
+    const fight = ensureBellyFight(gameState);
+    const living = fight.tainted.filter((m) => m?.kind === "skeleton").length;
+    if (living >= 10) return false;
+    let spots = pickBellySpawnTiles(gameState, 6, (x, y) => {
+      const dist = Math.max(Math.abs(x - head.x), Math.abs(y - head.y));
+      return dist >= 1 && dist <= 3;
+    });
+    if (!spots.length) {
+      spots = pickBellySpawnTiles(
+        gameState,
+        1,
+        (x, y) => inBellyCoreRoom(x, y) && !(x === BELLY_CORE_X && y === BELLY_CORE_Y)
+      );
+    }
+    const spot = spots[0];
+    if (!spot) return false;
+    fight.tainted.push({
+      x: spot.x,
+      y: spot.y,
+      hp: BELLY_SKELETON_HP,
+      maxHp: BELLY_SKELETON_HP,
+      kind: "skeleton",
+    });
+    return true;
+  }
+
+  function bellyCrystalAt(gameState, x, y) {
+    return (gameState?.bellyFight?.crystals || []).find((c) => c && c.x === x && c.y === y) || null;
+  }
+
+  function tentacleCrystalsLeft(fight, tentacleId) {
+    return (fight?.crystals || []).filter((c) => c && c.tentacleId === tentacleId).length;
+  }
+
+  function isTentacleDizzy(fight, tent) {
+    if (!tent) return false;
+    if (tent.dizzy) return true;
+    return tentacleCrystalsLeft(fight, tent.id) <= 0;
+  }
+
+  function scatterTentacleCrystals(gameState) {
+    const fight = gameState?.bellyFight;
+    if (!fight?.tentacles?.length) return;
+    fight.crystals = [];
+    const spots = pickBellySpawnTiles(gameState, 40, (x, y) => {
+      const tile = getActiveTile(gameState, x, y);
+      if (!tile || tile.kind === "wall" || tile.kind === "exit" || tile.kind === "core") {
+        return false;
+      }
+      if (inBellyCoreRoom(x, y)) return false;
+      return tile.room === "littleHall" || tile.room === "bigHall";
+    });
+    let n = 0;
+    fight.tentacles.forEach((tent, i) => {
+      tent.id = i;
+      tent.dizzy = false;
+      for (let c = 0; c < 3; c += 1) {
+        const spot = spots[n];
+        n += 1;
+        if (!spot) return;
+        fight.crystals.push({
+          x: spot.x,
+          y: spot.y,
+          tentacleId: i,
+          hp: 10,
+          maxHp: 10,
+          kind: "crystal",
+        });
+      }
+    });
+    fight._boltSig = "";
+    fight._boltRoutes = [];
+    fight._boltTileKeys = null;
+  }
+
+  function bellyLineTiles(x0, y0, x1, y1) {
+    const tiles = [];
+    let x = x0;
+    let y = y0;
+    const dx = Math.abs(x1 - x0);
+    const dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
+    while (true) {
+      tiles.push({ x, y });
+      if (x === x1 && y === y1) break;
+      const e2 = err * 2;
+      if (e2 > -dy) {
+        err -= dy;
+        x += sx;
+      }
+      if (e2 < dx) {
+        err += dx;
+        y += sy;
+      }
+    }
+    return tiles;
+  }
+
+  function bellyWalkPath(gameState, x0, y0, x1, y1) {
+    const startKey = `${x0},${y0}`;
+    const endKey = `${x1},${y1}`;
+    const canStep = (x, y) => isBellyWalkable(getActiveTile(gameState, x, y));
+    if (!canStep(x0, y0) || !canStep(x1, y1)) return bellyLineTiles(x0, y0, x1, y1);
+    const prev = new Map([[startKey, null]]);
+    const queue = [[x0, y0]];
+    const dirs = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ];
+    for (let i = 0; i < queue.length; i += 1) {
+      const [x, y] = queue[i];
+      if (x === x1 && y === y1) break;
+      for (const [dx, dy] of dirs) {
+        const nx = x + dx;
+        const ny = y + dy;
+        const key = `${nx},${ny}`;
+        if (prev.has(key) || !canStep(nx, ny)) continue;
+        prev.set(key, [x, y]);
+        queue.push([nx, ny]);
+      }
+    }
+    if (!prev.has(endKey)) return bellyLineTiles(x0, y0, x1, y1);
+    const path = [];
+    let cur = [x1, y1];
+    while (cur) {
+      path.push({ x: cur[0], y: cur[1] });
+      cur = prev.get(`${cur[0]},${cur[1]}`);
+    }
+    path.reverse();
+    return path;
+  }
+
+  function bellyBoltRoutes(gameState) {
+    const fight = gameState?.bellyFight;
+    if (!fight) return [];
+    const sig = `${(fight.crystals || [])
+      .map((c) => `${c.x},${c.y},${c.tentacleId}`)
+      .join("|")}#${(fight.tentacles || [])
+      .map((t) => `${t.id},${t.x},${t.y},${t.dizzy ? 1 : 0}`)
+      .join("|")}`;
+    if (fight._boltSig === sig && Array.isArray(fight._boltRoutes)) return fight._boltRoutes;
+    const routes = [];
+    for (const crystal of fight.crystals || []) {
+      const tent = (fight.tentacles || []).find((t) => t && t.id === crystal.tentacleId);
+      if (!tent || isTentacleDizzy(fight, tent)) continue;
+      routes.push({
+        crystal,
+        tent,
+        tiles: bellyWalkPath(gameState, crystal.x, crystal.y, tent.x, tent.y),
+      });
+    }
+    fight._boltSig = sig;
+    fight._boltRoutes = routes;
+    return routes;
+  }
+
+  function bellyBoltTileKeys(gameState) {
+    const fight = gameState?.bellyFight;
+    const routes = bellyBoltRoutes(gameState);
+    if (!fight) return new Set();
+    if (fight._boltKeySig === fight._boltSig && fight._boltTileKeys instanceof Set) {
+      return fight._boltTileKeys;
+    }
+    const keys = new Set();
+    for (const route of routes) {
+      for (const tile of route.tiles) keys.add(`${tile.x},${tile.y}`);
+    }
+    fight._boltKeySig = fight._boltSig;
+    fight._boltTileKeys = keys;
+    return keys;
+  }
+
+  function spawnBellyTainted(gameState, count) {
+    const fight = ensureBellyFight(gameState);
+    const spots = pickBellySpawnTiles(
+      gameState,
+      count,
+      (x, y) => inBellyCoreRoom(x, y) && !(x === BELLY_CORE_X && y === BELLY_CORE_Y)
+    );
+    for (const spot of spots) {
+      fight.tainted.push({
+        x: spot.x,
+        y: spot.y,
+        hp: BELLY_TAINTED_HP,
+        maxHp: BELLY_TAINTED_HP,
+        kind: "tainted",
+      });
+    }
+  }
+
+  function knockPlayerFromBellyCore(gameState) {
+    throwPlayerFromBelly(gameState, BELLY_CORE_X, BELLY_CORE_Y, "Tentacles hurl you from the core!");
+  }
+
+  function throwPlayerFromBelly(gameState, fromX, fromY, message) {
+    const dests = [
+      { x: 25, y: 33 },
+      { x: 25, y: 32 },
+      { x: 18, y: 25 },
+      { x: 32, y: 25 },
+      { x: 25, y: 17 },
+      { x: 17, y: 18 },
+      { x: 33, y: 18 },
+      { x: 17, y: 32 },
+      { x: 33, y: 32 },
+    ];
+    dests.sort((a, b) => {
+      const da = Math.abs(a.x - fromX) + Math.abs(a.y - fromY);
+      const db = Math.abs(b.x - fromX) + Math.abs(b.y - fromY);
+      return db - da;
+    });
+    for (const dest of dests) {
+      const tile = getActiveTile(gameState, dest.x, dest.y);
+      if (!isBellyWalkable(tile)) continue;
+      if (bellyFoeAt(gameState, dest.x, dest.y)) continue;
+      gameState.player = {
+        x: dest.x,
+        y: dest.y,
+        facing: gameState.player?.facing || "s",
+      };
+      if (message) setToast(gameState, message);
+      return true;
+    }
+    return false;
+  }
+
+  function pullPlayerTowardBellyFoe(gameState, foe) {
+    if (!foe || !gameState?.player) return false;
+    const px = gameState.player.x;
+    const py = gameState.player.y;
+    const dx = Math.sign(foe.x - px);
+    const dy = Math.sign(foe.y - py);
+    if (!dx && !dy) return false;
+    const tries = [];
+    if (dx && dy) {
+      tries.push({ x: px + dx, y: py + dy });
+      tries.push({ x: px + dx, y: py });
+      tries.push({ x: px, y: py + dy });
+    } else {
+      tries.push({ x: px + dx, y: py + dy });
+    }
+    for (const step of tries) {
+      const tile = getActiveTile(gameState, step.x, step.y);
+      if (!isBellyWalkable(tile)) continue;
+      if (bellyFoeAt(gameState, step.x, step.y)) continue;
+      gameState.player.x = step.x;
+      gameState.player.y = step.y;
+      return true;
+    }
+    return false;
+  }
+
+  function maybeUnlockBellyCore(gameState) {
+    const fight = ensureBellyFight(gameState);
+    if (fight.coreOpen) return;
+    if (fight.strikes < 1 || fight.strikes > 3) return;
+    if (bellyEnemiesLeft(fight) > 0) return;
+    fight.coreOpen = true;
+    setToast(gameState, "Every enemy is down. The core is open again.");
+  }
+
+  function startBellyPhase1(gameState) {
+    const fight = ensureBellyFight(gameState);
+    fight.coreOpen = false;
+    spawnBellyTainted(gameState, 10);
+    knockPlayerFromBellyCore(gameState);
+    setToast(gameState, "First phase! Tentacles lash out — 10 tainted monsters rise.");
+    speakAda(gameState, "witherStormBellyPhase1");
+  }
+
+  function startBellyPhase2(gameState) {
+    const fight = ensureBellyFight(gameState);
+    fight.coreOpen = false;
+    fight.boss = {
+      x: BELLY_CORE_X,
+      y: BELLY_CORE_Y,
+      hp: BELLY_BOSS_HP,
+      maxHp: BELLY_BOSS_HP,
+      kind: "boss",
+      cooldown: 0,
+      shotKind: 0,
+      spawnCooldown: 0,
+    };
+    spawnBellyTainted(gameState, 2);
+    knockPlayerFromBellyCore(gameState);
+    setToast(gameState, "Second phase! A mini-boss claims the core and releases tainted.");
+    speakAda(gameState, "witherStormBellyPhase2");
+  }
+
+  function startBellyPhase3(gameState) {
+    const fight = ensureBellyFight(gameState);
+    fight.coreOpen = false;
+    spawnBellyTainted(gameState, 20);
+    const woke = Date.now();
+    fight.heads = [
+      {
+        x: 22,
+        y: 22,
+        hp: BELLY_HEAD_HP,
+        maxHp: BELLY_HEAD_HP,
+        kind: "head",
+        lastSkeletonAt: woke,
+      },
+      {
+        x: 28,
+        y: 28,
+        hp: BELLY_HEAD_HP,
+        maxHp: BELLY_HEAD_HP,
+        kind: "head",
+        lastSkeletonAt: woke,
+      },
+    ];
+    fight.tentacles = [
+      { id: 0, x: 22, y: 25, hp: BELLY_TENTACLE_HP, maxHp: BELLY_TENTACLE_HP, kind: "tentacle", dizzy: false },
+      { id: 1, x: 28, y: 25, hp: BELLY_TENTACLE_HP, maxHp: BELLY_TENTACLE_HP, kind: "tentacle", dizzy: false },
+      { id: 2, x: 25, y: 22, hp: BELLY_TENTACLE_HP, maxHp: BELLY_TENTACLE_HP, kind: "tentacle", dizzy: false },
+      { id: 3, x: 25, y: 28, hp: BELLY_TENTACLE_HP, maxHp: BELLY_TENTACLE_HP, kind: "tentacle", dizzy: false },
+      { id: 4, x: 23, y: 28, hp: BELLY_TENTACLE_HP, maxHp: BELLY_TENTACLE_HP, kind: "tentacle", dizzy: false },
+    ];
+    const reserved = new Set(
+      [...fight.heads, ...fight.tentacles, { x: BELLY_CORE_X, y: BELLY_CORE_Y }].map(
+        (p) => `${p.x},${p.y}`
+      )
+    );
+    fight.tainted = fight.tainted.filter((m) => m && !reserved.has(`${m.x},${m.y}`));
+    scatterTentacleCrystals(gameState);
+    knockPlayerFromBellyCore(gameState);
+    setToast(gameState, "Third phase! Smash each tentacle's 3 crystals in the maze, then slay every enemy.");
+    speakAda(gameState, "witherStormBellyPhase3");
+  }
+
+  function syncBellyWhiteout(gameState = state) {
+    const el = document.getElementById("belly-whiteout");
+    const on = isBellyWhiteout(gameState);
+    if (el) {
+      el.hidden = !on;
+      el.setAttribute("aria-hidden", on ? "false" : "true");
+    }
+    document.body.classList.toggle("is-belly-whiteout", on);
+  }
+
+  function beginBellyVictory(gameState) {
+    gameState.bellyWhiteoutAt = Date.now();
+    setToast(gameState, "The command block detonates — light swallows everything…");
+    speakAda(gameState, "witherStormBellyVictory");
+    syncBellyWhiteout(gameState);
+  }
+
+  function finishBellyVictory(gameState) {
+    if (!gameState) return;
+    gameState.bellyWhiteoutAt = 0;
+    syncBellyWhiteout(gameState);
+    restoreWitherStormTiles(gameState);
+    const storm = gameState.witherStorm;
+    if (storm) {
+      storm.defeated = true;
+      storm.hp = 0;
+    }
+    gameState.bellyFight = emptyBellyFight();
+    gameState.bellyHeat = 0;
+    gameState.bellyPoison = 0;
+    if (isInsideBelly(gameState)) {
+      const from = gameState.bellyFrom;
+      gameState.insideBelly = false;
+      gameState.bellyTiles = null;
+      gameState.bellyFrom = null;
+      gameState.bellyLayoutVersion = 0;
+      placePlayerBesideWitherHole(gameState, from);
+      ensurePlayerOnWalkable(gameState);
+    }
+    setToast(gameState, "The Wither Storm is gone. Trees, ore, and land are whole again.");
+    syncWitherStormMusic(gameState);
+  }
+
+  function strikeBellyCore(gameState) {
+    const fight = ensureBellyFight(gameState);
+    if (!fight.coreOpen) {
+      const left = bellyEnemiesLeft(fight);
+      setToast(
+        gameState,
+        left
+          ? `The core is sealed — slay every enemy first (${left} left)`
+          : "The core is sealed"
+      );
+      return true;
+    }
+    if (!canActWithHealth(gameState)) return false;
+    applyHungerCost(gameState, hungerActionCost());
+    fight.strikes += 1;
+    if (fight.strikes === 1) startBellyPhase1(gameState);
+    else if (fight.strikes === 2) startBellyPhase2(gameState);
+    else if (fight.strikes === 3) startBellyPhase3(gameState);
+    else beginBellyVictory(gameState);
+    return true;
+  }
+
+  function stepBellyFoeTowardPlayer(gameState, foe) {
+    if (!foe) return;
+    const px = gameState.player.x;
+    const py = gameState.player.y;
+    const dx = Math.sign(px - foe.x);
+    const dy = Math.sign(py - foe.y);
+    const tries = [];
+    if (dx || dy) {
+      tries.push({ x: foe.x + dx, y: foe.y + dy });
+      if (dx && dy) {
+        tries.push({ x: foe.x + dx, y: foe.y });
+        tries.push({ x: foe.x, y: foe.y + dy });
+      }
+    }
+    for (const step of tries) {
+      if (!isBellyFoeWalkable(gameState, step.x, step.y, foe)) continue;
+      foe.x = step.x;
+      foe.y = step.y;
+      return;
+    }
+  }
+
+  function bellyBossFire(gameState, fight) {
+    const boss = fight.boss;
+    if (!boss) return;
+    const kinds = ["fire", "arrow", "magic"];
+    const kind = kinds[boss.shotKind % kinds.length];
+    boss.shotKind += 1;
+    const dx = Math.sign(gameState.player.x - boss.x);
+    const dy = Math.sign(gameState.player.y - boss.y);
+    if (!dx && !dy) return;
+    fight.shots.push({
+      x: boss.x + dx,
+      y: boss.y + dy,
+      dx: dx || 0,
+      dy: dy || 0,
+      kind,
+    });
+  }
+
+  function applyBellyShotHit(gameState, shot) {
+    if (shot.kind === "fire") {
+      applyHealthCost(gameState, Math.max(2, Math.floor(healthMax() * 0.04)));
+      if (gameState.health > 0) setToast(gameState, "A fireball hits you!");
+    } else if (shot.kind === "arrow") {
+      applyHealthCost(gameState, Math.max(1, Math.floor(healthMax() * 0.025)));
+      if (gameState.health > 0) setToast(gameState, "An arrow hits you!");
+    } else {
+      applyHealthCost(gameState, Math.max(1, Math.floor(healthMax() * 0.02)));
+      gameState.bellyPoison = Math.max(gameState.bellyPoison || 0, 4);
+      gameState.bellyHeat = Math.min(3, (gameState.bellyHeat || 0) + 1);
+      if (gameState.health > 0) setToast(gameState, "A poison-heat magic ball hits you!");
+    }
+  }
+
+  function tickBellyCombat(gameState) {
+    if (!gameState || !isInsideBelly(gameState) || isBellyWhiteout(gameState)) return false;
+    const fight = ensureBellyFight(gameState);
+    let changed = false;
+
+    const now = Date.now();
+    for (const mon of fight.tainted) {
+      stepBellyFoeTowardPlayer(gameState, mon);
+      changed = true;
+    }
+    for (const head of fight.heads) {
+      if (!head.lastSkeletonAt) head.lastSkeletonAt = now;
+      if (now - head.lastSkeletonAt >= BELLY_HEAD_SKELETON_MS) {
+        head.lastSkeletonAt = now;
+        if (spawnBellySkeletonNear(gameState, head)) {
+          setToast(gameState, "A wither head releases a tainted skeleton!");
+          changed = true;
+        }
+      }
+    }
+    if (fight.boss) {
+      if (inBellyCoreRoom(gameState.player.x, gameState.player.y)) {
+        stepBellyFoeTowardPlayer(gameState, fight.boss);
+      }
+      fight.boss.cooldown = (fight.boss.cooldown || 0) + 1;
+      if (fight.boss.cooldown >= 2) {
+        fight.boss.cooldown = 0;
+        bellyBossFire(gameState, fight);
+      }
+      fight.boss.spawnCooldown = (fight.boss.spawnCooldown || 0) + 1;
+      const taintedMobs = fight.tainted.filter((m) => m?.kind !== "skeleton").length;
+      if (fight.boss.spawnCooldown >= 3 && taintedMobs < 8) {
+        fight.boss.spawnCooldown = 0;
+        const before = fight.tainted.length;
+        spawnBellyTainted(gameState, 1);
+        if (fight.tainted.length > before) {
+          setToast(gameState, "The mini-boss releases a tainted monster!");
+        }
+      }
+      changed = true;
+    }
+    let grabbed = false;
+    for (const tent of fight.tentacles) {
+      if (isTentacleDizzy(fight, tent)) continue;
+      const dist = Math.max(
+        Math.abs(tent.x - gameState.player.x),
+        Math.abs(tent.y - gameState.player.y)
+      );
+      if (dist <= 2) {
+        applyHealthCost(gameState, Math.max(1, Math.floor(healthMax() * 0.02)));
+        throwPlayerFromBelly(
+          gameState,
+          tent.x,
+          tent.y,
+          "A tentacle grabs you and throws you!"
+        );
+        grabbed = true;
+        changed = true;
+        break;
+      }
+    }
+    if (!grabbed && fight.heads.length) {
+      let nearest = null;
+      let best = Infinity;
+      for (const head of fight.heads) {
+        const dist = Math.max(
+          Math.abs(head.x - gameState.player.x),
+          Math.abs(head.y - gameState.player.y)
+        );
+        if (dist < best) {
+          best = dist;
+          nearest = head;
+        }
+      }
+      if (nearest && best <= 1) {
+        applyHealthCost(gameState, Math.max(3, Math.floor(healthMax() * 0.05)));
+        if (gameState.health > 0) setToast(gameState, "A wither head pulls you in and eats!");
+        changed = true;
+      } else if (nearest && best <= 6 && pullPlayerTowardBellyFoe(gameState, nearest)) {
+        setToast(gameState, "A wither head pulls you toward its maw…");
+        changed = true;
+      }
+    }
+
+    const nextShots = [];
+    for (const shot of fight.shots) {
+      shot.x += shot.dx;
+      shot.y += shot.dy;
+      const tile = getActiveTile(gameState, shot.x, shot.y);
+      if (!isBellyWalkable(tile)) continue;
+      if (shot.x === gameState.player.x && shot.y === gameState.player.y) {
+        applyBellyShotHit(gameState, shot);
+        changed = true;
+        continue;
+      }
+      nextShots.push(shot);
+      changed = true;
+    }
+    fight.shots = nextShots;
+
+    const touching = fight.tainted.some(
+      (m) =>
+        Math.max(Math.abs(m.x - gameState.player.x), Math.abs(m.y - gameState.player.y)) <= 1
+    );
+    if (touching) {
+      applyHealthCost(gameState, Math.max(1, Math.floor(healthMax() * 0.02)));
+      if (gameState.health > 0) setToast(gameState, "A tainted monster claws you!");
+    }
+    const onTent = bellyTentacleAt(gameState, gameState.player.x, gameState.player.y);
+    if (onTent && !grabbed && !isTentacleDizzy(fight, onTent)) {
+      applyHealthCost(gameState, Math.max(1, Math.floor(healthMax() * 0.02)));
+      throwPlayerFromBelly(
+        gameState,
+        gameState.player.x,
+        gameState.player.y,
+        "A tentacle grabs you and throws you!"
+      );
+    }
+    if ((gameState.bellyPoison || 0) > 0) {
+      gameState.bellyPoison -= 1;
+      applyHealthCost(gameState, Math.max(1, Math.floor(healthMax() * 0.01)));
+      if (gameState.health > 0) setToast(gameState, "Poison burns through you…");
+    }
+    if ((gameState.bellyHeat || 0) > 0 && Math.random() < 0.35) {
+      gameState.bellyHeat -= 1;
+    }
+    maybeUnlockBellyCore(gameState);
+    return changed;
+  }
+
+  function isBellyWalkable(tile) {
+    if (!tile) return false;
+    return tile.kind !== "wall";
+  }
+
+  function enterBellyOfTheBeast(gameState) {
+    if (!gameState || isInsideBelly(gameState)) return false;
+    if (isInsideBase(gameState)) return false;
+    gameState.bellyFrom = {
+      x: gameState.player.x,
+      y: gameState.player.y,
+      facing: gameState.player.facing || "s",
+    };
+    gameState.insideBelly = true;
+    gameState.bellyTiles = makeBellyWorld();
+    gameState.bellyLayoutVersion = BELLY_LAYOUT_VERSION;
+    ensureBellyFight(gameState);
+    const drop = pickRandomBellyWalkTile(gameState);
+    gameState.player = { x: drop.x, y: drop.y, facing: "n" };
+    setToast(gameState, "You fall into the Belly of the Beast…");
+    speakAda(gameState, "witherStormBelly");
+    return true;
+  }
+
+  function placePlayerBesideWitherHole(gameState, from) {
+    const ox = Math.max(0, Math.min(COLS - 1, Math.floor(from?.x ?? COLS / 2)));
+    const oy = Math.max(0, Math.min(ROWS - 1, Math.floor(from?.y ?? ROWS / 2)));
+    const facing = from?.facing || "s";
+    gameState.player = { x: ox, y: oy, facing };
+    const storm = activeWitherStorm(gameState);
+    if (!isWitherStormHoleOpen(storm) || !isWitherStormCore(gameState, ox, oy)) {
+      return;
+    }
+    const dirs = [
+      [0, 1],
+      [0, -1],
+      [1, 0],
+      [-1, 0],
+      [1, 1],
+      [-1, 1],
+      [1, -1],
+      [-1, -1],
+    ];
+    for (const [dx, dy] of dirs) {
+      const nx = ox + dx;
+      const ny = oy + dy;
+      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+      if (isWitherStormCore(gameState, nx, ny)) continue;
+      const tile = getTile(gameState, nx, ny);
+      if (!isWalkableTile(tile, gameState)) continue;
+      gameState.player.x = nx;
+      gameState.player.y = ny;
+      return;
+    }
+  }
+
+  function leaveBellyOfTheBeast(gameState) {
+    if (!gameState || !isInsideBelly(gameState)) return false;
+    const from = gameState.bellyFrom;
+    gameState.insideBelly = false;
+    gameState.bellyTiles = null;
+    gameState.bellyFrom = null;
+    gameState.bellyLayoutVersion = 0;
+    placePlayerBesideWitherHole(gameState, from);
+    ensurePlayerOnWalkable(gameState);
+    setToast(gameState, "You climb out of the beast.");
+    return true;
+  }
+
+  function normalizeBelly(gameState) {
+    if (!gameState) return;
+    gameState.insideBelly = Boolean(gameState.insideBelly);
+    if (!gameState.insideBelly) {
+      gameState.bellyTiles = null;
+      gameState.bellyFrom = null;
+      return;
+    }
+    const storm = activeWitherStorm(gameState);
+    if (!isWitherStormHoleOpen(storm)) {
+      leaveBellyOfTheBeast(gameState);
+      return;
+    }
+    if (
+      !Array.isArray(gameState.bellyTiles) ||
+      gameState.bellyTiles.length !== BELLY_COLS * BELLY_ROWS ||
+      gameState.bellyLayoutVersion !== BELLY_LAYOUT_VERSION
+    ) {
+      gameState.bellyTiles = makeBellyWorld();
+      gameState.bellyLayoutVersion = BELLY_LAYOUT_VERSION;
+      const here = getActiveTile(gameState, gameState.player?.x, gameState.player?.y);
+      if (!isBellyWalkable(here)) {
+        const drop = pickRandomBellyWalkTile(gameState);
+        gameState.player = {
+          x: drop.x,
+          y: drop.y,
+          facing: gameState.player?.facing || "n",
+        };
+      }
+    }
+    if (!gameState.bellyFrom || !Number.isFinite(gameState.bellyFrom.x)) {
+      gameState.bellyFrom = {
+        x: storm.x,
+        y: storm.y,
+        facing: gameState.player?.facing || "s",
+      };
+    }
+    ensureBellyFight(gameState);
+    gameState.bellyHeat = Math.max(0, Math.floor(Number(gameState.bellyHeat) || 0));
+    gameState.bellyPoison = Math.max(0, Math.floor(Number(gameState.bellyPoison) || 0));
+    if (gameState.bellyWhiteoutAt) {
+      const started = Number(gameState.bellyWhiteoutAt) || 0;
+      if (!started || Date.now() - started >= BELLY_WHITEOUT_MS) {
+        finishBellyVictory(gameState);
+      } else {
+        syncBellyWhiteout(gameState);
+      }
+    }
   }
 
   const INTERIOR_ROOM_LABELS = {
@@ -631,6 +1695,15 @@ window.IslandFoundry = (() => {
       });
     }
 
+    // Strange note in the middle of the hall.
+    set(5, 4, {
+      kind: "floor",
+      room: "hall",
+      feature: "note",
+      icon: "📜",
+      label: "Strange Note — click to take",
+    });
+
     // Key hook in the south hall — blocks walking; stand next to it and click
     set(5, 8, {
       kind: "keyHook",
@@ -668,6 +1741,10 @@ window.IslandFoundry = (() => {
 
   function getActiveTile(gameState, x, y) {
     if (!gameState) return null;
+    if (isInsideBelly(gameState)) {
+      if (x < 0 || y < 0 || x >= BELLY_COLS || y >= BELLY_ROWS) return null;
+      return gameState.bellyTiles?.[y * BELLY_COLS + x] || null;
+    }
     if (isInsideBase(gameState)) {
       if (x < 0 || y < 0 || x >= INTERIOR_COLS || y >= INTERIOR_ROWS) return null;
       return gameState.interiorTiles?.[y * INTERIOR_COLS + x] || null;
@@ -816,6 +1893,114 @@ window.IslandFoundry = (() => {
     if (hook) refreshKeyHookTile(hook, gameState.baseKeyOnHook);
   }
 
+  function hasStrangeNote(gameState) {
+    if (!gameState || isSixSevenNoteGone()) return false;
+    if ((gameState.inventory?.strangeNote || 0) >= 1) return true;
+    return Boolean(
+      gameState.bag?.some((stack) => stack?.id === "strangeNote" && stack.count > 0)
+    );
+  }
+
+  /** 6-7 unlock retires the note + tracker until Reset mods. */
+  function isSixSevenNoteGone() {
+    return Boolean(window.KeaghanApp?.isSixSevenModUnlocked?.());
+  }
+
+  function stripStrangeNoteItem(gameState) {
+    if (!gameState) return;
+    if (gameState.inventory) gameState.inventory.strangeNote = 0;
+    if (Array.isArray(gameState.bag)) {
+      for (let i = 0; i < gameState.bag.length; i++) {
+        if (gameState.bag[i]?.id === "strangeNote") gameState.bag[i] = null;
+      }
+    }
+  }
+
+  function hideNoteTile(tile) {
+    if (!tile) return;
+    tile.feature = null;
+    tile.icon = null;
+    tile.label = INTERIOR_ROOM_LABELS.hall || "Hallway";
+  }
+
+  function normalizeStrangeNote(gameState) {
+    if (!gameState) return;
+    gameState.baseNoteCollected = Boolean(gameState.baseNoteCollected);
+    gameState.baseNoteRead = Boolean(gameState.baseNoteRead);
+    if (isSixSevenNoteGone()) {
+      if (hasStrangeNoteItem(gameState)) gameState.baseNoteCollected = true;
+      if (gameState.baseNoteRead) gameState.baseNoteCollected = true;
+      stripStrangeNoteItem(gameState);
+      return;
+    }
+    if (hasStrangeNoteItem(gameState)) gameState.baseNoteCollected = true;
+    if (gameState.baseNoteRead) gameState.baseNoteCollected = true;
+    if (gameState.baseNoteCollected && !hasStrangeNoteItem(gameState)) {
+      addItem(gameState, "strangeNote", 1);
+    }
+  }
+
+  function hasStrangeNoteItem(gameState) {
+    if (!gameState) return false;
+    if ((gameState.inventory?.strangeNote || 0) >= 1) return true;
+    return Boolean(
+      gameState.bag?.some((stack) => stack?.id === "strangeNote" && stack.count > 0)
+    );
+  }
+
+  function findNoteTile(gameState) {
+    if (!gameState?.interiorTiles) return null;
+    return (
+      gameState.interiorTiles.find((t) => t?.feature === "note") ||
+      gameState.interiorTiles.find((t) => t?.x === 5 && t?.y === 4 && t?.room === "hall") ||
+      null
+    );
+  }
+
+  function applyNoteTileState(gameState) {
+    if (!gameState?.interiorTiles) return;
+    normalizeStrangeNote(gameState);
+    const tile = findNoteTile(gameState);
+    if (!tile) return;
+    if (isSixSevenNoteGone() || gameState.baseNoteCollected) {
+      hideNoteTile(tile);
+      return;
+    }
+    tile.kind = "floor";
+    tile.room = "hall";
+    tile.feature = "note";
+    tile.icon = "📜";
+    tile.label = "Strange Note — click to take";
+  }
+
+  function onSixSevenNoteUnlockChanged() {
+    if (!state) return;
+    applyNoteTileState(state);
+    if (isSixSevenNoteGone() && openStrangeNote) {
+      openStrangeNote = false;
+      hideModal("note-modal");
+    }
+    saveState(state);
+    if (playActive) render();
+  }
+
+  function tryCollectBaseNote(gameState, tile) {
+    if (!gameState || tile?.feature !== "note") return false;
+    if (isSixSevenNoteGone()) return false;
+    normalizeStrangeNote(gameState);
+    if (gameState.baseNoteCollected || hasStrangeNote(gameState)) {
+      gameState.baseNoteCollected = true;
+      applyNoteTileState(gameState);
+      setToast(gameState, "You already have the note");
+      return true;
+    }
+    addItem(gameState, "strangeNote", 1);
+    gameState.baseNoteCollected = true;
+    applyNoteTileState(gameState);
+    setToast(gameState, "Picked up a Strange Note — open Tab and click it");
+    return true;
+  }
+
   /** Force the Base Key back onto the hook (e.g. death leave). */
   function returnBaseKeyToHook(gameState) {
     if (!gameState || !hasBaseKey(gameState)) return false;
@@ -898,6 +2083,18 @@ window.IslandFoundry = (() => {
   function normalizePlayer(gameState) {
     if (!gameState) return;
     const facing = normalizeFacing(gameState.player?.facing);
+    if (isInsideBelly(gameState)) {
+      const raw = gameState.player;
+      const fallback = bellyCorePos(gameState.bellyTiles);
+      const x = Number.isFinite(raw?.x) ? Math.floor(raw.x) : fallback.x;
+      const y = Number.isFinite(raw?.y) ? Math.floor(raw.y) : fallback.y;
+      gameState.player = {
+        x: Math.max(0, Math.min(BELLY_COLS - 1, x)),
+        y: Math.max(0, Math.min(BELLY_ROWS - 1, y)),
+        facing,
+      };
+      return;
+    }
     if (isInsideBase(gameState)) {
       const fallback = interiorSpawnPos();
       const raw = gameState.player;
@@ -995,7 +2192,9 @@ window.IslandFoundry = (() => {
   }
 
   function monsterAt(gameState, x, y, except = null) {
-    if (!gameState || !Array.isArray(gameState.monsters)) return null;
+    if (!gameState) return null;
+    if (isInsideBelly(gameState)) return bellyFoeAt(gameState, x, y, except);
+    if (!Array.isArray(gameState.monsters)) return null;
     return (
       gameState.monsters.find((m) => m && m !== except && m.x === x && m.y === y) || null
     );
@@ -1009,6 +2208,11 @@ window.IslandFoundry = (() => {
   /** Empty land or Iron Base floor — no live resources, other structures, or monsters. */
   function isWalkableTile(tile, gameState) {
     if (!tile) return false;
+    if (gameState && isInsideBelly(gameState)) {
+      if (!isBellyWalkable(tile)) return false;
+      if (bellyFoeAt(gameState, tile.x, tile.y)) return false;
+      return true;
+    }
     if (gameState && isInsideBase(gameState)) return isInteriorWalkable(tile, gameState);
     // You may walk on Iron Base; other buildings block.
     if (tile.machine && tile.machine !== "base") return false;
@@ -1132,8 +2336,13 @@ window.IslandFoundry = (() => {
     el.addEventListener("animationend", onEnd);
   }
 
+  function isPlayerInvincible() {
+    return Boolean(window.KeaghanApp?.isInvincibleModInstalled?.());
+  }
+
   function applyHealthCost(gameState, cost) {
     if (!gameState || !cost) return;
+    if (isPlayerInvincible() || isBellyWhiteout(gameState)) return;
     normalizeHealth(gameState);
     const before = gameState.health;
     gameState.health = Math.max(0, gameState.health - cost);
@@ -1256,6 +2465,7 @@ window.IslandFoundry = (() => {
     }
     for (let i = 0; i < gameState.bag.length; i++) {
       const stack = gameState.bag[i];
+      if (stack?.id === "strangeNote") continue;
       if (stack && stack.count > 0) loot.push({ id: stack.id, count: stack.count });
       gameState.bag[i] = null;
     }
@@ -1310,9 +2520,12 @@ window.IslandFoundry = (() => {
     if (!gameState || gameState._handlingDeath) return;
     gameState._handlingDeath = true;
     try {
-      if (isInsideBase(gameState)) {
-        leaveBaseInterior(gameState, { silent: true, skipRender: true });
-      }
+    if (isInsideBelly(gameState)) {
+      leaveBellyOfTheBeast(gameState);
+    }
+    if (isInsideBase(gameState)) {
+      leaveBaseInterior(gameState, { silent: true, skipRender: true });
+    }
       clearBuildMode();
       if (typeof closePlayerInvUi === "function") closePlayerInvUi();
       if (typeof closeSmelterUi === "function") closeSmelterUi();
@@ -1600,6 +2813,7 @@ window.IslandFoundry = (() => {
       ensureBag(state);
       ensureEggsDone(state);
       ensureTvForbidden(state);
+      normalizeStrangeNote(state);
       normalizeHunger(state);
       normalizeHealth(state);
       normalizeMonsters(state);
@@ -1609,7 +2823,11 @@ window.IslandFoundry = (() => {
       normalizeEquipment(state);
       normalizePlayerCool(state);
       retireOutdoorCraftingTables(state);
-      if (!isInsideBase(state)) {
+      normalizeWitherStorm(state);
+      normalizeBelly(state);
+      if (isInsideBelly(state) || isInsideBase(state)) {
+        normalizePlayer(state);
+      } else {
         normalizePlayer(state);
         ensurePlayerOnWalkable(state);
       }
@@ -1637,13 +2855,15 @@ window.IslandFoundry = (() => {
         openBaseEnterPrompt ||
         openBaseLeavePrompt ||
         openSleepPrompt ||
-        openTvPrompt
+        (openTvPrompt && !isTvPipActive()) ||
+        openStrangeNote
     );
   }
 
   /** WASD step — empty land only. Click still harvests / opens machines in 3×3 reach. */
   function tryMovePlayer(dx, dy) {
     if (!state || !playActive || gamePaused || menusBlockPlayerMove()) return false;
+    if (isBellyWhiteout(state)) return false;
     ensurePlayerOnWalkable(state);
     const prevX = state.player.x;
     const prevY = state.player.y;
@@ -1677,6 +2897,18 @@ window.IslandFoundry = (() => {
       if (fpvMode) renderFpv();
       return false;
     }
+    if (isInsideBelly(state)) {
+      state.player.x = nx;
+      state.player.y = ny;
+      if (dest?.kind === "exit" || dest?.feature === "exit") {
+        leaveBellyOfTheBeast(state);
+      }
+      renderWorld();
+      renderHud();
+      saveState(state);
+      return true;
+    }
+
     // Outdoor hills: one-block steps only (steeper cliffs block).
     if (!isInsideBase(state)) {
       const from = getActiveTile(state, prevX, prevY);
@@ -1694,6 +2926,14 @@ window.IslandFoundry = (() => {
     state.player.y = ny;
     if (!isInsideBase(state)) {
       rememberActionTile(state, nx, ny);
+      const storm = activeWitherStorm(state);
+      if (isWitherStormHoleOpen(storm) && isWitherStormCore(state, nx, ny)) {
+        enterBellyOfTheBeast(state);
+        renderWorld();
+        renderHud();
+        saveState(state);
+        return true;
+      }
       const nowOnBase = getTile(state, nx, ny)?.machine === "base";
       // Stepping onto the base footprint → ask to come inside (decline pushes back).
       if (nowOnBase && !wasOnBase) {
@@ -1804,7 +3044,7 @@ window.IslandFoundry = (() => {
   function moveBagSlotToCraft(slotIndex, amount = 1) {
     ensureBag(state);
     const stack = state.bag[slotIndex];
-    if (!stack) return 0;
+    if (!stack || stack.id === "strangeNote") return 0;
     const want = Math.min(amount === Infinity ? stack.count : amount, stack.count);
     if (want < 1) return 0;
     const moved = pushToActiveGridFromBag(slotIndex, want);
@@ -1844,7 +3084,7 @@ window.IslandFoundry = (() => {
     const bench = getActiveBench();
     ensureBag(state);
     const stack = state.bag[bagIndex];
-    if (!bench || !stack || stack.count < 1) return 0;
+    if (!bench || !stack || stack.count < 1 || stack.id === "strangeNote") return 0;
     if (gridIndex < 0 || gridIndex >= bench.size) return 0;
 
     const cell = bench.grid[gridIndex];
@@ -1919,6 +3159,10 @@ window.IslandFoundry = (() => {
   /** Destroy a dragged bag/grid stack (drop on the inventory trash zone). */
   function destroyDraggedStack(drag) {
     if (!drag || !state) return false;
+    if (drag.itemId === "strangeNote") {
+      setToast(state, "The note won't burn");
+      return false;
+    }
     ensureBag(state);
     if (drag.from === "bag") {
       const stack = state.bag[drag.bagIndex];
@@ -2660,8 +3904,100 @@ window.IslandFoundry = (() => {
     }
   }
 
+  function hitBellyFoeAt(gameState, x, y) {
+    if (!gameState || !isInPlayerReach(gameState, x, y)) return false;
+    if (!canActWithHealth(gameState)) return false;
+    const fight = ensureBellyFight(gameState);
+    const tool = gameState.activeTool || "hand";
+    const sword = GameData.monsters?.swordTool || "ironSword";
+    const swordHit = tool === sword;
+
+    const applyHit = (foe, list, idx, slainText) => {
+      const maxHp = foe.maxHp || foe.hp;
+      const damage = swordHit
+        ? foe.kind === "tainted" || foe.kind === "skeleton"
+          ? maxHp
+          : 20
+        : 1;
+      foe.hp = Math.max(0, foe.hp - damage);
+      applyHungerCost(gameState, hungerActionCost());
+      if (foe.hp <= 0) {
+        if (list && idx >= 0) list.splice(idx, 1);
+        else if (foe.kind === "boss") fight.boss = null;
+        setToast(gameState, slainText);
+        maybeUnlockBellyCore(gameState);
+      } else {
+        const label =
+          foe.kind === "boss"
+            ? "Mini-boss"
+            : foe.kind === "head"
+              ? "Wither head"
+              : foe.kind === "tentacle"
+                ? "Tentacle"
+                : foe.kind === "skeleton"
+                  ? "Tainted skeleton"
+                  : "Tainted";
+        setToast(gameState, `${label} ${foe.hp}/${maxHp}`);
+      }
+      return true;
+    };
+
+    if (fight.boss && fight.boss.x === x && fight.boss.y === y) {
+      return applyHit(fight.boss, null, -1, "The mini-boss is slain!");
+    }
+    const headIdx = fight.heads.findIndex((h) => h && h.x === x && h.y === y);
+    if (headIdx >= 0) {
+      return applyHit(fight.heads[headIdx], fight.heads, headIdx, "A wither head shatters!");
+    }
+    const tentIdx = fight.tentacles.findIndex((t) => t && t.x === x && t.y === y);
+    if (tentIdx >= 0) {
+      const tent = fight.tentacles[tentIdx];
+      const left = tentacleCrystalsLeft(fight, tent.id);
+      if (left > 0 && !tent.dizzy) {
+        setToast(gameState, `This tentacle is shielded — smash its crystals in the maze (${left} left)`);
+        return true;
+      }
+      return applyHit(fight.tentacles[tentIdx], fight.tentacles, tentIdx, "A tentacle collapses!");
+    }
+    const cIdx = (fight.crystals || []).findIndex((c) => c && c.x === x && c.y === y);
+    if (cIdx >= 0) {
+      const crystal = fight.crystals[cIdx];
+      const damage = swordHit ? crystal.maxHp || 10 : 1;
+      crystal.hp = Math.max(0, crystal.hp - damage);
+      applyHungerCost(gameState, hungerActionCost());
+      if (crystal.hp <= 0) {
+        const tid = crystal.tentacleId;
+        fight.crystals.splice(cIdx, 1);
+        const remain = tentacleCrystalsLeft(fight, tid);
+        const tent = fight.tentacles.find((t) => t && t.id === tid);
+        if (remain <= 0 && tent) {
+          tent.dizzy = true;
+          setToast(gameState, "The tentacle goes dizzy — it can't grab or throw!");
+        } else {
+          setToast(gameState, `Crystal shattered — ${remain} left for that tentacle`);
+        }
+      } else {
+        setToast(gameState, `Crystal ${crystal.hp}/${crystal.maxHp}`);
+      }
+      return true;
+    }
+    const tIdx = fight.tainted.findIndex((m) => m && m.x === x && m.y === y);
+    if (tIdx >= 0) {
+      return applyHit(
+        fight.tainted[tIdx],
+        fight.tainted,
+        tIdx,
+        fight.tainted[tIdx].kind === "skeleton"
+          ? "You slew a tainted skeleton!"
+          : "You slew a tainted monster!"
+      );
+    }
+    return false;
+  }
+
   /** Click a monster in 3×3 reach: fist = 1 HP, Iron Sword = one-shot (20 HP). */
   function hitMonsterAt(gameState, x, y) {
+    if (isInsideBelly(gameState)) return hitBellyFoeAt(gameState, x, y);
     if (!gameState || !isInPlayerReach(gameState, x, y)) return false;
     const idx = gameState.monsters.findIndex((m) => m && m.x === x && m.y === y);
     if (idx < 0) return false;
@@ -2736,6 +4072,7 @@ window.IslandFoundry = (() => {
     }
     // Night hunters move + bite after vitals so death from claws still works.
     if (gameState.health > 0) tickMonsters(gameState, ticks);
+    if (gameState.health > 0) tickWitherStorm(gameState, minutes);
   }
 
   function regrowNodesAtDawn(gameState) {
@@ -3027,7 +4364,7 @@ window.IslandFoundry = (() => {
     // Rain loop while raining/storming; thunder cracks on the lightning cycle.
     // Indoors: keep the weather audible but muffled (walls dampen it).
     window.KeaghanSfx?.setWeather?.(weather || null);
-    window.KeaghanSfx?.setWeatherMuffled?.(isInsideBase(state));
+    window.KeaghanSfx?.setWeatherMuffled?.(isInsideBase(state) || isInsideBelly(state));
   }
 
   const SKYLINE_BUILDINGS = {
@@ -3199,6 +4536,9 @@ window.IslandFoundry = (() => {
       // Inside the Base: pull toward a comfy 22°C.
       temp = temp + (22 - temp) * 0.65;
     }
+    if (isInsideBelly(gameState)) {
+      temp = 24 + 6 * Math.max(0, gameState.bellyHeat || 0);
+    }
     normalizePlayerCool(gameState);
     if (gameState.playerCoolMinutesLeft > 0) {
       temp -= GameData.cooling?.playerDropC ?? 10;
@@ -3238,7 +4578,7 @@ window.IslandFoundry = (() => {
     if (!wrap || !valueEl) return;
 
     normalizePlayerCool(state);
-    const indoors = isInsideBase(state);
+    const indoors = isInsideBase(state) || isInsideBelly(state);
     const iced = state.playerCoolMinutesLeft > 0;
     const powered = poweredTilesCache || computePoweredTiles(state);
     const fanBreeze = playerNearPoweredFan(state, powered);
@@ -3280,6 +4620,93 @@ window.IslandFoundry = (() => {
     updateSkyBackground(handDegrees);
     renderHunger();
     renderPlayerTemp();
+    renderMinimap();
+  }
+
+  function renderMinimap() {
+    const wrap = document.getElementById("world-minimap");
+    const canvas = document.getElementById("world-minimap-canvas");
+    if (!wrap || !canvas || !state) return;
+    const inBelly = isInsideBelly(state);
+    const inside = isInsideBase(state);
+    wrap.hidden = false;
+    wrap.classList.toggle("is-belly", inBelly);
+    wrap.setAttribute(
+      "aria-label",
+      inBelly ? "Belly of the Beast map" : inside ? "Base map" : "Island map"
+    );
+    wrap.title = inBelly
+      ? "Belly map — yellow you, cyan crystals, pink tentacles, gold dizzy, bolts link crystals to tentacles"
+      : inside
+        ? "Base map"
+        : "Island map";
+    const { cols, rows } = activeMapSize(state);
+    const size = 150;
+    if (canvas.width !== size || canvas.height !== size) {
+      canvas.width = size;
+      canvas.height = size;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "#0a0610";
+    ctx.fillRect(0, 0, size, size);
+    const cw = size / cols;
+    const ch = size / rows;
+    for (let y = 0; y < rows; y += 1) {
+      for (let x = 0; x < cols; x += 1) {
+        const tile = getActiveTile(state, x, y);
+        let color = "#1a1420";
+        if (!tile) color = "#050308";
+        else if (tile.kind === "wall") color = "#120818";
+        else if (tile.kind === "exit") color = "#d0b0f0";
+        else if (tile.kind === "core" || tile.feature === "core") color = "#e070ff";
+        else if (tile.room === "littleHall") color = "#3a1848";
+        else if (tile.room === "bigHall") color = "#5a2878";
+        else if (tile.room === "coreRoom") color = "#6a3090";
+        else if (tile.machine === "base") color = "#6a8aaa";
+        else if (tile.node && tile.hp > 0) color = "#2a5a38";
+        else color = inBelly ? "#4a2060" : "#3d6a48";
+        if (!inBelly && !inside && typeof witherStormCovers === "function" && witherStormCovers(state, x, y)) {
+          color = "#4a1860";
+        }
+        ctx.fillStyle = color;
+        ctx.fillRect(x * cw, y * ch, Math.ceil(cw), Math.ceil(ch));
+      }
+    }
+    const plot = (x, y, color) => {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      ctx.fillStyle = color;
+      ctx.fillRect(x * cw, y * ch, Math.ceil(cw), Math.ceil(ch));
+    };
+    if (inBelly) {
+      for (const crystal of state.bellyFight?.crystals || []) {
+        plot(crystal.x, crystal.y, "#7ee8ff");
+      }
+      for (const tent of state.bellyFight?.tentacles || []) {
+        plot(tent.x, tent.y, isTentacleDizzy(state.bellyFight, tent) ? "#ffe080" : "#ff4a7a");
+      }
+      for (const head of state.bellyFight?.heads || []) plot(head.x, head.y, "#ffd0d0");
+      for (const mob of state.bellyFight?.tainted || []) {
+        plot(mob.x, mob.y, mob.kind === "skeleton" ? "#d0d0d0" : "#80ff9a");
+      }
+      if (state.bellyFight?.boss) {
+        plot(state.bellyFight.boss.x, state.bellyFight.boss.y, "#ff3030");
+      }
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      for (const route of bellyBoltRoutes(state)) {
+        if (!route.tiles.length) continue;
+        ctx.beginPath();
+        ctx.moveTo((route.tiles[0].x + 0.5) * cw, (route.tiles[0].y + 0.5) * ch);
+        for (let i = 1; i < route.tiles.length; i += 1) {
+          ctx.lineTo((route.tiles[i].x + 0.5) * cw, (route.tiles[i].y + 0.5) * ch);
+        }
+        ctx.strokeStyle = "rgba(126, 232, 255, 0.7)";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+    }
+    if (state.player) plot(state.player.x, state.player.y, "#fff46a");
   }
 
   function grantHarvest(state, resourceId, amount, labelHint) {
@@ -3649,6 +5076,7 @@ window.IslandFoundry = (() => {
     gameState.interiorTiles = makeInteriorWorld(tier);
     applyDoorLockState(gameState);
     applyKeyHookState(gameState);
+    applyNoteTileState(gameState);
     if (pos && gameState.insideBase) {
       gameState.player = pos;
       normalizePlayer(gameState);
@@ -4123,6 +5551,7 @@ window.IslandFoundry = (() => {
       }
     }
     paintTvSixSevenEgg();
+    syncTvDock();
   }
 
   function paintTvLoopPicker() {
@@ -4261,6 +5690,7 @@ window.IslandFoundry = (() => {
     }
     t.wireDone = t.wireDone.map((done) => Boolean(done));
     if (t.wires) t.wireDone = [true, true, true, true];
+    t.opened = Boolean(t.opened);
     return t;
   }
 
@@ -4835,6 +6265,10 @@ window.IslandFoundry = (() => {
       });
       const doneAt = TV_FORBIDDEN_BRIEFING_LINES.length * 3200 + 5600;
       tvForbiddenBriefingTimer = window.setTimeout(() => {
+        if (state) {
+          ensureTvForbidden(state).opened = true;
+          saveState(state);
+        }
         stopTvForbiddenBriefing();
         setToast(state, "The hatch goes quiet again.");
         renderHud();
@@ -4961,8 +6395,14 @@ window.IslandFoundry = (() => {
     tvChannelFirst = first - 1;
     tvChannelLast = last - 2;
     normalizeTvChannelRange();
-    if (rejectUnavailableSixSevenChannel() && announce && state) {
-      setToast(state, "CH 6–7 is unavailable while the 6-7 Mod is installed.");
+    const blocked = rejectUnavailableSixSevenChannel();
+    if (blocked && announce && state) {
+      setToast(
+        state,
+        blocked === "mod"
+          ? "CH 6–7 is unavailable while the 6-7 Mod is installed."
+          : "That pairing is sealed. Finish the forbidden channel first."
+      );
     }
   }
 
@@ -5425,6 +6865,7 @@ window.IslandFoundry = (() => {
     const shake =
       openTvPrompt &&
       tvPhase === "watch" &&
+      !isTvPipActive() &&
       isTvSixSevenRange() &&
       clampTvLoops(tvLoopsPlanned) >= TV_LOOPS_MAX;
     panel.classList.toggle("is-six-seven-max-shake", shake);
@@ -5580,6 +7021,8 @@ window.IslandFoundry = (() => {
     rail?.classList.toggle("is-six-seven-mod-blocked", modBlocksExact67);
     if (readout && modBlocksExact67) {
       readout.title = "Exact CH 6–7 is unavailable while the 6-7 Mod is installed";
+    } else if (readout && !hasOpenedForbiddenChannel()) {
+      readout.title = "Exact CH 6–7 is sealed until you finish the forbidden channel";
     } else if (readout) {
       readout.removeAttribute("title");
     }
@@ -5611,6 +7054,7 @@ window.IslandFoundry = (() => {
     paintTvSixSevenEgg();
     syncTvForbiddenHatch();
     if (tvPhase === "setup") syncTvSixSevenLockdown();
+    if (openStrangeNote) renderStrangeNoteUi();
   }
 
   function paintTvSetupControls() {
@@ -5656,10 +7100,15 @@ window.IslandFoundry = (() => {
     return Boolean(window.KeaghanApp?.isSixSevenModInstalled?.());
   }
 
-  /** Exact CH 6–7 — disabled while the 6-7 Mod is installed. */
+  function hasOpenedForbiddenChannel() {
+    return Boolean(state && ensureTvForbidden(state).opened);
+  }
+
+  /** Exact CH 6–7 — sealed until the forbidden channel, and while the 6-7 Mod is on. */
   function isTvSixSevenRange() {
     normalizeTvChannelRange();
     if (isSixSevenModInstalled()) return false;
+    if (!hasOpenedForbiddenChannel()) return false;
     return tvChannelFirst === 5 && tvChannelLast === 6;
   }
 
@@ -5669,9 +7118,14 @@ window.IslandFoundry = (() => {
    * @returns {boolean} true if the range had to be changed
    */
   function rejectUnavailableSixSevenChannel() {
-    if (!isSixSevenModInstalled()) return false;
     normalizeTvChannelRange();
     if (tvChannelFirst !== 5 || tvChannelLast !== 6) return false;
+    const reason = isSixSevenModInstalled()
+      ? "mod"
+      : hasOpenedForbiddenChannel()
+        ? null
+        : "sealed";
+    if (!reason) return false;
     tvChannelFirst = 4; // CH 5–7
     tvChannelLast = 6;
     normalizeTvChannelRange();
@@ -5680,7 +7134,7 @@ window.IslandFoundry = (() => {
       tvChannelLast = TV_CHANNELS.length - 1;
       normalizeTvChannelRange();
     }
-    return true;
+    return reason;
   }
 
   /** Pre-load exact 6–7: trap the player until 20 auto-loops start watch. */
@@ -5757,6 +7211,7 @@ window.IslandFoundry = (() => {
       paintTvSpeedDial();
     }
     paintTvLoopPicker();
+    syncTvDock();
     const hint = document.querySelector("#tv-setup .tv-setup__hint");
     if (hint) {
       if (locked) {
@@ -5928,8 +7383,24 @@ window.IslandFoundry = (() => {
     return 0.08 + 0.92 * (t * t);
   }
 
+  function realmCrowdTalkLevel() {
+    if (isSixSevenNoteGone()) return 0;
+    if (!playActive || gamePaused || !state?.baseNoteRead) return 0;
+    if (openTvPrompt && (isTvSixSevenRange() || tvSixSevenOutroActive)) return 0;
+    const pct = sixSevenRealmProgress(state);
+    if (pct < 16) return 0;
+    const t = Math.min(1, Math.max(0, (pct - 16) / 84));
+    // Quiet mid-tracker; stacked overlapping talks near the last 6-7 message.
+    return Math.min(1, t * t * (0.28 + 0.72 * t));
+  }
+
+  function syncSixSevenCrowdTalks() {
+    const level = Math.max(tvSixSevenCrowdChantLevel(), realmCrowdTalkLevel());
+    window.KeaghanSfx?.setSixSevenCrowdChant?.(level);
+  }
+
   function syncTvSixSevenCrowdChant() {
-    window.KeaghanSfx?.setSixSevenCrowdChant?.(tvSixSevenCrowdChantLevel());
+    syncSixSevenCrowdTalks();
   }
 
   /** 0–1: longer + deeper into 6–7 watch → more corrupted. */
@@ -6168,6 +7639,7 @@ window.IslandFoundry = (() => {
     if (isTvSixSevenRange() && tvPhase === "watch") paintTvCorruption();
     if (finale) applyTvSixSevenFinaleEffects();
     if (isTvSixSevenRange()) syncTvSixSevenCrowdChant();
+    syncTvDock();
   }
 
   function endTvSession(message) {
@@ -6932,6 +8404,33 @@ window.IslandFoundry = (() => {
     scheduleTvPlaybackTick();
   }
 
+  /** Corner dock only while Tab is open — 6-7 pre-load and watch share this. */
+  function isTvPipActive() {
+    if (!openTvPrompt || !openPlayerInv) return false;
+    if (tvSixSevenOutroActive || isTvSixSevenFinale()) return false;
+    if (tvPhase === "watch") return true;
+    return isTvSixSevenLockdown();
+  }
+
+  function syncTvDock() {
+    const modal = document.getElementById("tv-modal");
+    if (!modal) return;
+    const pip = isTvPipActive();
+    modal.classList.toggle("is-pip", pip);
+    if (!pip) {
+      document.querySelector("#tv-modal .tv-panel")?.classList.remove("is-six-seven-max-shake");
+    }
+    if (
+      openPlayerInv &&
+      openTvPrompt &&
+      tvPhase === "watch" &&
+      (isTvSixSevenFinale() || tvSixSevenOutroActive)
+    ) {
+      closePlayerInvUi();
+      if (state) setToast(state, "Channel 8 said its last 6-7… Tab is done.");
+    }
+  }
+
   function beginTvWatch() {
     tvLoopsPlanned = clampTvLoops(tvLoopsPlanned);
     normalizeTvChannelRange();
@@ -6956,6 +8455,7 @@ window.IslandFoundry = (() => {
       clearTvCorruptionPaint();
     }
     startTvPlayback();
+    syncTvDock();
     {
       const mult = tvChannelSpeedMultiplier();
       const speedBit = mult > 1 ? ` · ×${mult}` : "";
@@ -7031,6 +8531,7 @@ window.IslandFoundry = (() => {
     stopTvForbiddenFinale(false);
     stopTvForbiddenLockdown(false);
     stopTvForbiddenBriefing();
+    document.getElementById("tv-modal")?.classList.remove("is-pip");
     hideModal("tv-modal");
   }
 
@@ -7044,7 +8545,6 @@ window.IslandFoundry = (() => {
     closeSleepPrompt();
     closeSmelterUi();
     closeGeneratorUi();
-    closePlayerInvUi();
     closeCraftTableUi();
     closeKitchenUi();
     closeStorageUi();
@@ -7399,6 +8899,9 @@ window.IslandFoundry = (() => {
    */
   function canPlaceOnTile(type, tile) {
     if (!tile || tile.machine) return { ok: false, reason: "Tile occupied" };
+    if (state && witherStormCovers(state, tile.x, tile.y)) {
+      return { ok: false, reason: "The Wither Storm occupies this tile" };
+    }
     if (type === "drill") {
       if (!tile.node) {
         return { ok: false, reason: "Drills must be placed on a resource node" };
@@ -7937,62 +9440,67 @@ window.IslandFoundry = (() => {
     for (const stack of m.output) addItem(state, stack.id, stack.count);
   }
 
+  function tickOneSmelter(gameState, m, minutes, electric) {
+    ensureSmelterShape(m);
+    let remaining = minutes;
+    while (remaining > 0) {
+      const source = findSmeltSource(m);
+      if (!source) {
+        m.progressMinutes = 0;
+        m.smeltingSlot = -1;
+        break;
+      }
+
+      const recipe = getSmeltRecipe(source.stack.id);
+      m.smeltingSlot = source.index;
+
+      if (outputFreeSpace(m, recipe.output) < 1) break;
+
+      // Wired to a live generator → electric heat. Otherwise burn local fuel.
+      if (!electric && m.storedEnergy <= 0) {
+        if (!burnFuelToEnergy(m)) {
+          m.progressMinutes = 0;
+          break;
+        }
+      }
+
+      const heatLeft = electric ? remaining : m.storedEnergy;
+      const step = Math.min(remaining, heatLeft, recipe.minutes - m.progressMinutes);
+      if (step <= 0) break;
+
+      if (!electric) m.storedEnergy -= step;
+      m.progressMinutes += step;
+      remaining -= step;
+
+      if (!electric && m.storedEnergy <= 0 && m.progressMinutes < recipe.minutes) {
+        m.progressMinutes = 0;
+        break;
+      }
+
+      if (m.progressMinutes >= recipe.minutes) {
+        if (!tryPushOutput(m, recipe.output, 1)) break;
+        source.stack.count -= 1;
+        if (source.stack.count <= 0) {
+          m.input.splice(source.index, 1);
+          m.smeltingSlot = -1;
+        }
+        m.progressMinutes = 0;
+        gameState.stats.manualSmelted = (gameState.stats.manualSmelted || 0) + 1;
+        gameState.stats.smelted[recipe.output] = (gameState.stats.smelted[recipe.output] || 0) + 1;
+        setToast(gameState, `Smelter finished +1 ${GameData.getItem(recipe.output).name}`);
+      }
+    }
+  }
+
   /** Advance all smelters by `minutes` of in-game time. */
   function tickSmelters(state, minutes) {
     const poweredTiles = computePoweredTiles(state);
     for (const m of state.machines) {
       if (m.type !== "smelter") continue;
-      ensureSmelterShape(m);
-      const electric = isMachinePowered(state, m, poweredTiles);
-
-      let remaining = minutes;
-      while (remaining > 0) {
-        const source = findSmeltSource(m);
-        if (!source) {
-          m.progressMinutes = 0;
-          m.smeltingSlot = -1;
-          break;
-        }
-
-        const recipe = getSmeltRecipe(source.stack.id);
-        m.smeltingSlot = source.index;
-
-        if (outputFreeSpace(m, recipe.output) < 1) break;
-
-        // Wired to a live generator → electric heat. Otherwise burn local fuel.
-        if (!electric && m.storedEnergy <= 0) {
-          if (!burnFuelToEnergy(m)) {
-            m.progressMinutes = 0;
-            break;
-          }
-        }
-
-        const heatLeft = electric ? remaining : m.storedEnergy;
-        const step = Math.min(remaining, heatLeft, recipe.minutes - m.progressMinutes);
-        if (step <= 0) break;
-
-        if (!electric) m.storedEnergy -= step;
-        m.progressMinutes += step;
-        remaining -= step;
-
-        if (!electric && m.storedEnergy <= 0 && m.progressMinutes < recipe.minutes) {
-          m.progressMinutes = 0;
-          break;
-        }
-
-        if (m.progressMinutes >= recipe.minutes) {
-          if (!tryPushOutput(m, recipe.output, 1)) break;
-          source.stack.count -= 1;
-          if (source.stack.count <= 0) {
-            m.input.splice(source.index, 1);
-            m.smeltingSlot = -1;
-          }
-          m.progressMinutes = 0;
-          state.stats.manualSmelted = (state.stats.manualSmelted || 0) + 1;
-          state.stats.smelted[recipe.output] = (state.stats.smelted[recipe.output] || 0) + 1;
-          setToast(state, `Smelter finished +1 ${GameData.getItem(recipe.output).name}`);
-        }
-      }
+      tickOneSmelter(state, m, minutes, isMachinePowered(state, m, poweredTiles));
+    }
+    if (state.workroomSmelter || state.workroomCraft) {
+      tickOneSmelter(state, ensureWorkroomSmelter(state), minutes, false);
     }
   }
 
@@ -8368,6 +9876,7 @@ window.IslandFoundry = (() => {
     }
     easterEggsSig = "";
     renderEasterEggs();
+    maybeUnlockWitherStormMod(state);
     saveState(state);
     renderHud();
     return true;
@@ -8387,6 +9896,1023 @@ window.IslandFoundry = (() => {
       advancementsSig = "";
       renderAdvancements();
     }
+    maybeUnlockWitherStormMod(state);
+  }
+
+  function areAllAdvancementsDone(gameState) {
+    if (!gameState?.goalsDone) return false;
+    const goals = GameData.goals || [];
+    if (!goals.length) return false;
+    return goals.every((goal) => Boolean(gameState.goalsDone[goal.id]));
+  }
+
+  /** Hidden Wither Storm — every advancement, easter egg, and completable mod. */
+  function maybeUnlockWitherStormMod(gameState = state) {
+    if (!gameState) return false;
+    if (window.KeaghanApp?.isWitherStormModUnlocked?.()) return false;
+    if (!areAllAdvancementsDone(gameState)) return false;
+    if (!areAllEasterEggsDone(gameState)) return false;
+    if (!window.KeaghanApp?.isSixSevenModUnlocked?.()) return false;
+    window.KeaghanApp?.unlockWitherStormMod?.();
+    setToast(gameState, "Mod unlocked: Wither Storm — check Mods");
+    speakAda(gameState, "witherStormUnlock");
+    return true;
+  }
+
+  function isWitherStormModOn() {
+    return Boolean(window.KeaghanApp?.isWitherStormModInstalled?.());
+  }
+
+  const WITHER_WAKE_MINUTES = 40;
+  const WITHER_WAKE_HP = 5;
+  const WITHER_HP_PER_TILE = 5;
+  const WITHER_PROT_PER_TILE = 1;
+  const WITHER_BELLY_HP = 300;
+
+  function isWitherStormDormant(storm) {
+    return Boolean(storm && !storm.defeated && !storm.awakened && (storm.phase || 1) < 2);
+  }
+
+  function witherStormConsumedCount(storm) {
+    return Array.isArray(storm?.consumed) ? storm.consumed.length : 0;
+  }
+
+  function witherStormLiveStats(storm) {
+    const n = witherStormConsumedCount(storm);
+    const dormant = isWitherStormDormant(storm);
+    let name = "Forming";
+    if (!dormant) {
+      if (n >= 40) name = "World-Eater";
+      else if (n >= 24) name = "Hungering";
+      else if (n >= 12) name = "Evolved";
+      else if (n >= 5) name = "Storm";
+      else name = "Awakened";
+    }
+    return {
+      name,
+      tiles: n,
+      heads: Math.min(4, dormant ? 1 : 1 + Math.floor(n / 6)),
+      tractor: dormant ? 0 : 99,
+      contactPct: dormant ? 0 : Math.min(14, 3 + Math.floor(n / 8)),
+      tear: Math.min(5, Math.floor(n / 8)),
+      protection: Math.max(0, n * WITHER_PROT_PER_TILE),
+    };
+  }
+
+  function witherStormProtection(storm) {
+    return witherStormLiveStats(storm).protection;
+  }
+
+  function isWitherStormHoleOpen(storm) {
+    if (!storm || storm.defeated || isWitherStormDormant(storm)) return false;
+    return Math.max(storm.hp || 0, storm.maxHp || 0) >= WITHER_BELLY_HP;
+  }
+
+  function isWitherStormCoreHidden(storm) {
+    if (!storm || isWitherStormDormant(storm)) return false;
+    return witherStormConsumedCount(storm) >= 2 || (storm.heightMass || 0) >= 1;
+  }
+
+  function syncWitherStormVitals(storm) {
+    if (!storm || storm.defeated || isWitherStormDormant(storm)) return;
+    const n = Math.max(1, witherStormConsumedCount(storm));
+    const nextMax = n * WITHER_HP_PER_TILE;
+    const prevMax = Math.max(0, Math.floor(Number(storm.maxHp) || 0));
+    const gained = nextMax - prevMax;
+    storm.maxHp = nextMax;
+    storm.protection = n * WITHER_PROT_PER_TILE;
+    if (gained > 0) storm.hp = Math.min(nextMax, (Number(storm.hp) || 0) + gained);
+    else storm.hp = Math.max(0, Math.min(nextMax, Number(storm.hp) || 0));
+  }
+
+  function witherStormKey(x, y) {
+    return `${x},${y}`;
+  }
+
+  function activeWitherStorm(gameState) {
+    const storm = gameState?.witherStorm;
+    if (!storm || storm.defeated || !isWitherStormModOn()) return null;
+    return storm;
+  }
+
+  function pickWitherStormSpawn(gameState) {
+    normalizePlayer(gameState);
+    const px = gameState.player?.x ?? Math.floor(COLS / 2);
+    const py = gameState.player?.y ?? Math.floor(ROWS / 2);
+    let best = { x: 1, y: 1, score: -Infinity };
+    for (let y = 1; y < ROWS - 1; y++) {
+      for (let x = 1; x < COLS - 1; x++) {
+        if (findBaseMachine(gameState, x, y)) continue;
+        const dPlayer = Math.max(Math.abs(x - px), Math.abs(y - py));
+        const dCenter = Math.max(Math.abs(x - (COLS - 1) / 2), Math.abs(y - (ROWS - 1) / 2));
+        const score = dPlayer * 3 + dCenter;
+        if (score > best.score) best = { x, y, score };
+      }
+    }
+    return { x: best.x, y: best.y };
+  }
+
+  function witherStormHeadCells(storm) {
+    if (!storm || storm.defeated) return [];
+    const wanted = Math.max(1, witherStormLiveStats(storm).heads || 1);
+    const prefs = [
+      [0, -1],
+      [-1, 0],
+      [1, 0],
+      [0, 1],
+    ];
+    const cells = [];
+    for (const [dx, dy] of prefs) {
+      if (cells.length >= wanted) break;
+      const x = storm.x + dx;
+      const y = storm.y + dy;
+      if (x < 0 || y < 0 || x >= COLS || y >= ROWS) continue;
+      cells.push({ x, y });
+    }
+    return cells;
+  }
+
+  function witherStormBodyHas(storm, x, y) {
+    if (!storm) return false;
+    if (storm.x === x && storm.y === y) return true;
+    return (storm.consumed || []).some((cell) => cell.x === x && cell.y === y);
+  }
+
+  function witherStormCovers(gameState, x, y) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm) return false;
+    return witherStormBodyHas(storm, x, y);
+  }
+
+  function isWitherStormCore(gameState, x, y) {
+    const storm = activeWitherStorm(gameState);
+    return Boolean(storm && storm.x === x && storm.y === y);
+  }
+
+  function isWitherStormHead(gameState, x, y) {
+    return witherStormHeadCells(activeWitherStorm(gameState)).some(
+      (cell) => cell.x === x && cell.y === y
+    );
+  }
+
+  function witherStormBeamCovers(gameState, x, y) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm || isInsideBase(gameState) || isPlayerOnBase(gameState)) return false;
+    const tractor = witherStormLiveStats(storm).tractor;
+    if (tractor < 1) return false;
+    const px = gameState.player.x;
+    const py = gameState.player.y;
+    const dist = Math.max(Math.abs(px - storm.x), Math.abs(py - storm.y));
+    if (dist > tractor || dist < 1) return false;
+    for (let i = 1; i < dist; i++) {
+      const tx = px + Math.round(((storm.x - px) * i) / dist);
+      const ty = py + Math.round(((storm.y - py) * i) / dist);
+      if (tx === x && ty === y) return true;
+    }
+    return false;
+  }
+
+  function snapshotWitherStormTile(gameState, tile) {
+    if (!tile) return null;
+    const machine = gameState.machines?.find(
+      (m) => m && m.x === tile.x && m.y === tile.y && m.type !== "base"
+    );
+    return {
+      x: tile.x,
+      y: tile.y,
+      node: tile.node || null,
+      hp: tile.hp || 0,
+      maxHp: tile.maxHp || 0,
+      kind: tile.kind || null,
+      height: Number.isFinite(tile.height) ? tile.height : tileHeight(tile),
+      machine: tile.machine && tile.machine !== "base" ? tile.machine : null,
+      machineSnap: machine ? { ...machine } : null,
+    };
+  }
+
+  function pickNextWitherStormMeal(gameState, storm) {
+    if (!gameState || !storm) return null;
+    const eaten = new Set();
+    eaten.add(witherStormKey(storm.x, storm.y));
+    for (const cell of storm.consumed || []) eaten.add(witherStormKey(cell.x, cell.y));
+    const adj = [];
+    const far = [];
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        if (eaten.has(witherStormKey(x, y))) continue;
+        if (findBaseMachine(gameState, x, y)) continue;
+        const tile = getTile(gameState, x, y);
+        if (!tile) continue;
+        const near = [
+          [0, -1],
+          [0, 1],
+          [-1, 0],
+          [1, 0],
+          [-1, -1],
+          [-1, 1],
+          [1, -1],
+          [1, 1],
+        ].some(([dx, dy]) => eaten.has(witherStormKey(x + dx, y + dy)));
+        const rich = Boolean(
+          (tile.node && tile.hp > 0) || (tile.machine && tile.machine !== "base")
+        );
+        const item = {
+          x,
+          y,
+          rich,
+          dist: Math.max(Math.abs(x - storm.x), Math.abs(y - storm.y)),
+        };
+        if (near) adj.push(item);
+        else far.push(item);
+      }
+    }
+    const byHunger = (a, b) => {
+      if (a.rich !== b.rich) return a.rich ? -1 : 1;
+      return a.dist - b.dist;
+    };
+    adj.sort(byHunger);
+    if (adj[0]) return { ...adj[0], reached: false };
+    far.sort(byHunger);
+    if (far[0]) return { ...far[0], reached: true };
+    return null;
+  }
+
+  function witherStormLandSpread(height) {
+    const h = Math.floor(Number(height) || 0);
+    if (h >= 2) return 2;
+    if (h >= 1) return 1;
+    return 0;
+  }
+
+  function witherStormBodyTiles(gameState, storm) {
+    const tiles = [];
+    const seen = new Set();
+    const add = (x, y) => {
+      const key = witherStormKey(x, y);
+      if (seen.has(key)) return;
+      seen.add(key);
+      const tile = getTile(gameState, x, y);
+      if (tile) tiles.push(tile);
+    };
+    if (!storm) return tiles;
+    add(storm.x, storm.y);
+    for (const cell of storm.consumed || []) add(cell.x, cell.y);
+    return tiles;
+  }
+
+  function restackWitherStormHeight(gameState) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm) return;
+    const body = witherStormBodyTiles(gameState, storm);
+    if (!body.length) return;
+    const mass = Math.max(0, Math.floor(Number(storm.heightMass) || 0));
+    const ranked = body
+      .map((tile) => ({
+        tile,
+        dist: Math.max(Math.abs(tile.x - storm.x), Math.abs(tile.y - storm.y)),
+      }))
+      .sort((a, b) => a.dist - b.dist || a.tile.x - b.tile.x || a.tile.y - b.tile.y);
+
+    if (mass < 1) {
+      for (const { tile } of ranked) tile.height = 0;
+      return;
+    }
+
+    let bestPeak = 1;
+    let bestDiff = Infinity;
+    for (let peak = 1; peak <= WITHER_STORM_HEIGHT_MAX; peak++) {
+      let sum = 0;
+      for (const { dist } of ranked) sum += Math.max(0, peak - dist);
+      const diff = Math.abs(sum - mass);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestPeak = peak;
+      }
+    }
+
+    let used = 0;
+    for (const { tile, dist } of ranked) {
+      const h = Math.max(0, bestPeak - dist);
+      tile.height = h;
+      used += h;
+    }
+    const core = getTile(gameState, storm.x, storm.y);
+    if (core && mass > used) {
+      core.height = Math.min(WITHER_STORM_HEIGHT_MAX, tileHeight(core) + (mass - used));
+    }
+  }
+
+  function spreadWitherStormTiles(gameState, extra) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm || extra < 1) return 0;
+    let added = 0;
+    for (let i = 0; i < extra; i++) {
+      const meal = pickNextWitherStormMeal(gameState, storm);
+      if (!meal) break;
+      if (consumeWitherStormTileAt(gameState, meal.x, meal.y, { fromSpread: true })) {
+        added += 1;
+      }
+    }
+    return added;
+  }
+
+  function applyWitherStormHeightGain(gameState, landHeight) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm) return 0;
+    const units = witherStormLandSpread(landHeight);
+    if (units < 1) {
+      restackWitherStormHeight(gameState);
+      return 0;
+    }
+    storm.heightMass = Math.max(0, Math.floor(Number(storm.heightMass) || 0)) + units;
+    const added = spreadWitherStormTiles(gameState, units);
+    restackWitherStormHeight(gameState);
+    return added;
+  }
+
+  function consumeWitherStormTileAt(gameState, x, y, opts = {}) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm) return false;
+    if (!Array.isArray(storm.consumed)) storm.consumed = [];
+    if (findBaseMachine(gameState, x, y)) return false;
+    if (storm.consumed.some((cell) => cell.x === x && cell.y === y)) return false;
+    const tile = getTile(gameState, x, y);
+    if (!tile) return false;
+    const landH = tileHeight(tile);
+    storm.consumed.push(snapshotWitherStormTile(gameState, tile));
+    if (tile.machine && tile.machine !== "base") {
+      gameState.machines = gameState.machines.filter(
+        (m) => !(m && m.x === x && m.y === y && m.type !== "base")
+      );
+      tile.machine = null;
+    }
+    if (tile.node) {
+      tile.hp = 0;
+      tile.node = null;
+      tile.kind = null;
+    }
+    tile.witherTorn = true;
+    if (!isWitherStormDormant(storm)) syncWitherStormVitals(storm);
+    if (opts.fromSpread) {
+      const units = witherStormLandSpread(landH);
+      if (units) storm.heightMass = Math.max(0, Math.floor(Number(storm.heightMass) || 0)) + units;
+      return true;
+    }
+    applyWitherStormHeightGain(gameState, landH);
+    return true;
+  }
+
+  function moveWitherStorm(gameState) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm || isWitherStormDormant(storm)) return false;
+    let tx = 0;
+    let ty = 0;
+    let n = 0;
+    const eaten = new Set(witherStormBodyTiles(gameState, storm).map((t) => witherStormKey(t.x, t.y)));
+    for (const tile of gameState.tiles || []) {
+      if (eaten.has(witherStormKey(tile.x, tile.y))) continue;
+      if (findBaseMachine(gameState, tile.x, tile.y)) continue;
+      tx += tile.x;
+      ty += tile.y;
+      n += 1;
+    }
+    if (n > 0) {
+      tx /= n;
+      ty /= n;
+    } else if (
+      !isInsideBelly(gameState) &&
+      !isInsideBase(gameState) &&
+      !isPlayerOnBase(gameState)
+    ) {
+      tx = gameState.player.x;
+      ty = gameState.player.y;
+    } else {
+      return false;
+    }
+    if (
+      !isInsideBelly(gameState) &&
+      !isInsideBase(gameState) &&
+      !isPlayerOnBase(gameState)
+    ) {
+      tx = (tx * 2 + gameState.player.x) / 3;
+      ty = (ty * 2 + gameState.player.y) / 3;
+    }
+    tx = Math.round(tx);
+    ty = Math.round(ty);
+    if (tx === storm.x && ty === storm.y) return false;
+
+    for (const step of witherStormTowardSteps(storm.x, storm.y, { x: tx, y: ty })) {
+      if (step.x < 0 || step.y < 0 || step.x >= COLS || step.y >= ROWS) continue;
+      if (findBaseMachine(gameState, step.x, step.y)) continue;
+      if (step.x === storm.x && step.y === storm.y) continue;
+      storm.x = step.x;
+      storm.y = step.y;
+      const already = (storm.consumed || []).some((cell) => cell.x === step.x && cell.y === step.y);
+      if (!already) consumeWitherStormTileAt(gameState, step.x, step.y);
+      else restackWitherStormHeight(gameState);
+      setToast(gameState, "The Wither Storm lurches…");
+      return true;
+    }
+    return false;
+  }
+
+  function growWitherStormOnce(gameState) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm || isWitherStormDormant(storm)) return false;
+    const meal = pickNextWitherStormMeal(gameState, storm);
+    if (!meal) return false;
+    if (!consumeWitherStormTileAt(gameState, meal.x, meal.y)) return false;
+    if (meal.reached) {
+      setToast(gameState, "No land nearby — the storm rips distant ground…");
+    }
+    return true;
+  }
+
+  function restoreWitherStormTiles(gameState) {
+    const storm = gameState?.witherStorm;
+    if (!storm?.consumed?.length) return;
+    for (const snap of storm.consumed) {
+      const tile = getTile(gameState, snap.x, snap.y);
+      if (!tile) continue;
+      if (Number.isFinite(snap.height)) tile.height = snap.height;
+      if (snap.node) {
+        tile.node = snap.node;
+        tile.hp = snap.hp;
+        tile.maxHp = snap.maxHp;
+        tile.kind = snap.kind || "node";
+      }
+      if (snap.machineSnap && !tile.machine) {
+        const exists = gameState.machines.some(
+          (m) => m && m.x === snap.x && m.y === snap.y
+        );
+        if (!exists) gameState.machines.push({ ...snap.machineSnap });
+        tile.machine = snap.machineSnap.type;
+      }
+    }
+    storm.consumed = [];
+    for (const tile of gameState.tiles || []) {
+      if (tile?.witherTorn) delete tile.witherTorn;
+    }
+  }
+
+  function applyWitherStormTornFlags(gameState) {
+    const storm = gameState?.witherStorm;
+    if (!storm?.consumed?.length || storm.defeated) return;
+    for (const cell of storm.consumed) {
+      const tile = getTile(gameState, cell.x, cell.y);
+      if (tile && !findBaseMachine(gameState, cell.x, cell.y)) tile.witherTorn = true;
+    }
+  }
+
+  function ensureWitherStorm(gameState) {
+    if (!gameState) return null;
+    if (!isWitherStormModOn()) {
+      if (gameState.witherStorm?.consumed?.length) restoreWitherStormTiles(gameState);
+      gameState.witherStorm = null;
+      syncWitherStormMusic(gameState);
+      return null;
+    }
+    if (gameState.witherStorm?.defeated) {
+      syncWitherStormMusic(gameState);
+      return gameState.witherStorm;
+    }
+    if (!gameState.witherStorm || typeof gameState.witherStorm !== "object") {
+      const spot = pickWitherStormSpawn(gameState);
+      gameState.witherStorm = {
+        x: spot.x,
+        y: spot.y,
+        phase: 1,
+        awakened: false,
+        hp: 0,
+        maxHp: WITHER_WAKE_HP,
+        growMinutes: 0,
+        consumed: [],
+        heightMass: 0,
+        defeated: false,
+      };
+      setToast(gameState, "A Wither Storm forms… 0/5 — it wakes at 5");
+      speakAda(gameState, "witherStormForm");
+    }
+    applyWitherStormTornFlags(gameState);
+    syncWitherStormMusic(gameState);
+    return gameState.witherStorm;
+  }
+
+  function normalizeWitherStorm(gameState) {
+    if (!gameState) return;
+    if (!isWitherStormModOn()) {
+      if (gameState.witherStorm?.consumed?.length) restoreWitherStormTiles(gameState);
+      gameState.witherStorm = null;
+      return;
+    }
+    const storm = gameState.witherStorm;
+    if (!storm || typeof storm !== "object") return;
+    storm.phase = Math.max(1, Math.floor(Number(storm.phase) || 1));
+    storm.awakened = Boolean(storm.awakened || storm.phase >= 2);
+    if (isWitherStormDormant(storm)) {
+      storm.hp = 0;
+      storm.maxHp = WITHER_WAKE_HP;
+    } else {
+      const rawMax = Number(storm.maxHp);
+      const rawHp = Number(storm.hp);
+      storm.maxHp = Math.max(
+        WITHER_WAKE_HP,
+        Number.isFinite(rawMax) ? Math.floor(rawMax) : WITHER_WAKE_HP
+      );
+      storm.hp = Math.max(
+        0,
+        Math.min(storm.maxHp, Number.isFinite(rawHp) ? Math.floor(rawHp) : WITHER_WAKE_HP)
+      );
+    }
+    storm.growMinutes = Math.max(0, Math.floor(Number(storm.growMinutes) || 0));
+    storm.x = Math.max(0, Math.min(COLS - 1, Math.floor(Number(storm.x) || 0)));
+    storm.y = Math.max(0, Math.min(ROWS - 1, Math.floor(Number(storm.y) || 0)));
+    if (!Array.isArray(storm.consumed)) storm.consumed = [];
+    storm.heightMass = Math.max(0, Math.floor(Number(storm.heightMass) || 0));
+    storm.defeated = Boolean(storm.defeated);
+    storm.holeAnnounced = Boolean(storm.holeAnnounced);
+    applyWitherStormTornFlags(gameState);
+    if (!storm.defeated) restackWitherStormHeight(gameState);
+  }
+
+  function onWitherStormModChanged() {
+    if (!state) return;
+    normalizeWitherStorm(state);
+    if (isWitherStormModOn()) ensureWitherStorm(state);
+    else syncWitherStormMusic(state);
+    if (playActive) {
+      saveState(state);
+      render();
+    }
+  }
+
+  function syncWitherStormMusic(gameState = state) {
+    const live = activeWitherStorm(gameState);
+    const outdoors = Boolean(
+      live &&
+        !isWitherStormDormant(live) &&
+        playActive &&
+        (!isInsideBase(gameState) || isInsideBelly(gameState))
+    );
+    if (outdoors) window.KeaghanSfx?.startOminousMusic?.();
+    else window.KeaghanSfx?.stopOminousMusic?.();
+  }
+
+  const WITHER_PULL_NODES = new Set(["tree", "rock", "coal", "iron", "copper", "carrot"]);
+
+  function tileHasWitherPullNode(tile) {
+    return Boolean(tile?.node && tile.hp > 0 && WITHER_PULL_NODES.has(tile.node));
+  }
+
+  function tileHasWitherPullLand(tile) {
+    const h = tileHeight(tile);
+    return h >= 1 && h <= TILE_HEIGHT_MAX;
+  }
+
+  function tileHasWitherPullMachine(gameState, tile) {
+    if (!tile?.machine || tile.machine === "base") return false;
+    if (findBaseMachine(gameState, tile.x, tile.y)) return false;
+    return true;
+  }
+
+  function isWitherStormMatterPullable(gameState, tile) {
+    if (!tile || findBaseMachine(gameState, tile.x, tile.y)) return false;
+    if (witherStormCovers(gameState, tile.x, tile.y)) return false;
+    return (
+      tileHasWitherPullNode(tile) ||
+      tileHasWitherPullLand(tile) ||
+      tileHasWitherPullMachine(gameState, tile)
+    );
+  }
+
+  function eatWitherStormMachine(gameState, tile) {
+    if (!tileHasWitherPullMachine(gameState, tile)) return null;
+    const type = tile.machine;
+    gameState.machines = (gameState.machines || []).filter(
+      (m) => !(m && m.x === tile.x && m.y === tile.y && m.type !== "base")
+    );
+    tile.machine = null;
+    return type;
+  }
+
+  function witherStormTowardSteps(x, y, storm) {
+    const dx = Math.sign(storm.x - x);
+    const dy = Math.sign(storm.y - y);
+    if (!dx && !dy) return [];
+    if (dx && dy) {
+      return [
+        { x: x + dx, y: y + dy },
+        { x: x + dx, y: y },
+        { x: x, y: y + dy },
+      ];
+    }
+    return [{ x: x + dx, y: y + dy }];
+  }
+
+  function witherStormPullDist(storm, x, y) {
+    let best = Math.max(Math.abs(x - storm.x), Math.abs(y - storm.y));
+    for (const cell of storm.consumed || []) {
+      best = Math.min(best, Math.max(Math.abs(x - cell.x), Math.abs(y - cell.y)));
+    }
+    return best;
+  }
+
+  function eatWitherStormMatter(tile) {
+    let ate = null;
+    if (tileHasWitherPullNode(tile)) {
+      ate = tile.node;
+      tile.node = null;
+      tile.hp = 0;
+      tile.maxHp = 0;
+      tile.kind = null;
+    }
+    if (tileHasWitherPullLand(tile)) {
+      tile.height = 0;
+      ate = ate || "land";
+    }
+    return ate;
+  }
+
+  function moveWitherStormMatter(gameState, from, dest) {
+    if (!from || !dest) return null;
+    if (witherStormCovers(gameState, dest.x, dest.y)) {
+      const landH = tileHasWitherPullLand(from) ? tileHeight(from) : 0;
+      const ate =
+        eatWitherStormMatter(from) || eatWitherStormMachine(gameState, from);
+      if (landH >= 1) applyWitherStormHeightGain(gameState, landH);
+      return ate;
+    }
+    if (findBaseMachine(gameState, dest.x, dest.y)) return null;
+    if (dest.machine) return null;
+
+    let moved = null;
+    if (tileHasWitherPullMachine(gameState, from)) {
+      const machine = (gameState.machines || []).find(
+        (m) => m && m.x === from.x && m.y === from.y && m.type !== "base"
+      );
+      if (machine) {
+        machine.x = dest.x;
+        machine.y = dest.y;
+        dest.machine = from.machine;
+        from.machine = null;
+        moved = dest.machine;
+      }
+    }
+    if (tileHasWitherPullNode(from) && !dest.node) {
+      dest.kind = from.kind || "node";
+      dest.node = from.node;
+      dest.hp = from.hp;
+      dest.maxHp = from.maxHp;
+      from.node = null;
+      from.hp = 0;
+      from.maxHp = 0;
+      from.kind = null;
+      moved = dest.node;
+    }
+    if (tileHasWitherPullLand(from)) {
+      const room = TILE_HEIGHT_MAX - tileHeight(dest);
+      if (room > 0) {
+        const take = Math.min(tileHeight(from), room);
+        dest.height = tileHeight(dest) + take;
+        from.height = tileHeight(from) - take;
+        moved = moved || "land";
+      }
+    }
+    return moved;
+  }
+
+  function pullWitherStormMatter(gameState) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm || isWitherStormDormant(storm)) return false;
+    const range = Math.max(3, witherStormLiveStats(storm).tractor);
+    const candidates = [];
+    for (const tile of gameState.tiles || []) {
+      if (!isWitherStormMatterPullable(gameState, tile)) continue;
+      const dist = witherStormPullDist(storm, tile.x, tile.y);
+      if (dist < 1 || dist > range) continue;
+      candidates.push({ tile, dist });
+    }
+    candidates.sort((a, b) => a.dist - b.dist);
+
+    let swallowed = null;
+    let slid = 0;
+    for (const { tile } of candidates) {
+      if (!isWitherStormMatterPullable(gameState, tile)) continue;
+      const steps = witherStormTowardSteps(tile.x, tile.y, storm);
+      for (const step of steps) {
+        if (step.x < 0 || step.y < 0 || step.x >= COLS || step.y >= ROWS) continue;
+        const dest = getTile(gameState, step.x, step.y);
+        const moved = moveWitherStormMatter(gameState, tile, dest);
+        if (!moved) continue;
+        slid += 1;
+        if (witherStormCovers(gameState, step.x, step.y)) swallowed = moved;
+        if (
+          gameState.player &&
+          gameState.player.x === dest.x &&
+          gameState.player.y === dest.y &&
+          dest.node &&
+          dest.hp > 0
+        ) {
+          ensurePlayerOnWalkable(gameState);
+        }
+        break;
+      }
+    }
+    if (swallowed) {
+      const label =
+        swallowed === "land"
+          ? "raised land"
+          : MACHINE_LABELS[swallowed]
+            ? MACHINE_LABELS[swallowed].toLowerCase()
+            : (GameData.nodeTypes?.[swallowed]?.label || swallowed).toLowerCase();
+      setToast(gameState, `The storm's gravity pulls in ${label}…`);
+    } else if (slid > 0 && !isWitherStormDormant(storm)) {
+      setToast(gameState, "The storm's gravity pulls everything toward the core…");
+    }
+    return slid > 0;
+  }
+
+  function pullPlayerTowardWitherStorm(gameState) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm || isInsideBelly(gameState) || isInsideBase(gameState) || isPlayerOnBase(gameState)) {
+      return false;
+    }
+    const tractor = witherStormLiveStats(storm).tractor;
+    if (tractor < 1) return false;
+    normalizePlayer(gameState);
+    const px = gameState.player.x;
+    const py = gameState.player.y;
+    const dist = Math.max(Math.abs(px - storm.x), Math.abs(py - storm.y));
+    if (dist > tractor || dist < 1) return false;
+    const dx = Math.sign(storm.x - px);
+    const dy = Math.sign(storm.y - py);
+    const tries = [];
+    if (dx && dy) {
+      tries.push({ x: px + dx, y: py + dy });
+      tries.push({ x: px + dx, y: py });
+      tries.push({ x: px, y: py + dy });
+    } else {
+      tries.push({ x: px + dx, y: py + dy });
+    }
+    for (const step of tries) {
+      if (step.x < 0 || step.y < 0 || step.x >= COLS || step.y >= ROWS) continue;
+      const dest = getTile(gameState, step.x, step.y);
+      if (!isWalkableTile(dest, gameState) && !witherStormCovers(gameState, step.x, step.y)) {
+        continue;
+      }
+      gameState.player.x = step.x;
+      gameState.player.y = step.y;
+      setToast(gameState, "The storm's gravity pulls you in…");
+      if (isWitherStormHoleOpen(storm) && isWitherStormCore(gameState, step.x, step.y)) {
+        enterBellyOfTheBeast(gameState);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function pullMonstersTowardWitherStorm(gameState) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm || isWitherStormDormant(storm) || isInsideBelly(gameState)) return false;
+    const tractor = witherStormLiveStats(storm).tractor;
+    if (tractor < 1 || !Array.isArray(gameState.monsters)) return false;
+    let slid = 0;
+    for (const mon of gameState.monsters) {
+      if (!mon) continue;
+      const dist = witherStormPullDist(storm, mon.x, mon.y);
+      if (dist < 1 || dist > tractor) continue;
+      for (const step of witherStormTowardSteps(mon.x, mon.y, storm)) {
+        if (step.x < 0 || step.y < 0 || step.x >= COLS || step.y >= ROWS) continue;
+        if (findBaseMachine(gameState, step.x, step.y)) continue;
+        if (monsterAt(gameState, step.x, step.y, mon)) continue;
+        const dest = getTile(gameState, step.x, step.y);
+        if (!isWalkableTile(dest, gameState) && !witherStormCovers(gameState, step.x, step.y)) {
+          continue;
+        }
+        mon.x = step.x;
+        mon.y = step.y;
+        slid += 1;
+        break;
+      }
+    }
+    return slid > 0;
+  }
+
+  function maybeFallIntoWitherHole(gameState) {
+    if (!gameState || isInsideBelly(gameState) || isInsideBase(gameState)) return false;
+    const storm = activeWitherStorm(gameState);
+    if (!isWitherStormHoleOpen(storm)) return false;
+    normalizePlayer(gameState);
+    if (!isWitherStormCore(gameState, gameState.player.x, gameState.player.y)) return false;
+    return enterBellyOfTheBeast(gameState);
+  }
+
+  function maybeAnnounceWitherHole(gameState, storm) {
+    if (!storm || storm.holeAnnounced || !isWitherStormHoleOpen(storm)) return;
+    storm.holeAnnounced = true;
+    if (!isInsideBelly(gameState)) {
+      setToast(gameState, "A hole opens in the heart of the storm…");
+    }
+    speakAda(gameState, "witherStormHole");
+  }
+
+  function applyWitherStormContact(gameState) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm || isWitherStormDormant(storm)) return;
+    if (isInsideBelly(gameState) || isInsideBase(gameState) || isPlayerOnBase(gameState)) return;
+    if (isPlayerInvincible()) return;
+    normalizePlayer(gameState);
+    const px = gameState.player.x;
+    const py = gameState.player.y;
+    const onStorm = witherStormCovers(gameState, px, py);
+    const byHead = witherStormHeadCells(storm).some(
+      (cell) => Math.max(Math.abs(cell.x - px), Math.abs(cell.y - py)) <= 1
+    );
+    if (!onStorm && !byHead) return;
+    const pct = witherStormLiveStats(storm).contactPct;
+    const dmg = Math.max(1, Math.floor((healthMax() * pct) / 100));
+    applyHealthCost(gameState, dmg);
+    if (gameState.health > 0) {
+      setToast(gameState, onStorm ? "The storm tears at you!" : "A wither head snaps!");
+    }
+  }
+
+  function defeatWitherStorm(gameState) {
+    const storm = gameState?.witherStorm;
+    if (!storm || storm.defeated) return;
+    restoreWitherStormTiles(gameState);
+    storm.defeated = true;
+    storm.hp = 0;
+    if (isInsideBelly(gameState)) leaveBellyOfTheBeast(gameState);
+    if (!isInsideBase(gameState)) ensurePlayerOnWalkable(gameState);
+    setToast(gameState, "The command block shatters. The Wither Storm collapses.");
+    syncWitherStormMusic(gameState);
+  }
+
+  function tickWitherStorm(gameState, minutes = 5) {
+    if (!gameState || minutes < 1) return;
+    const storm = ensureWitherStorm(gameState);
+    if (!storm || storm.defeated) return;
+    storm.growMinutes += minutes;
+    if (!storm.awakened && storm.growMinutes >= WITHER_WAKE_MINUTES) {
+      storm.awakened = true;
+      storm.phase = 2;
+      consumeWitherStormTileAt(gameState, storm.x, storm.y, { fromSpread: true });
+      syncWitherStormVitals(storm);
+      storm.hp = WITHER_WAKE_HP;
+      storm.maxHp = WITHER_WAKE_HP;
+      setToast(gameState, "The Wither Storm awakens! Health 5/5");
+      speakAda(gameState, "witherStormAwaken");
+    }
+    if (isWitherStormDormant(storm)) {
+      syncWitherStormMusic(gameState);
+      return;
+    }
+    growWitherStormOnce(gameState);
+    pullWitherStormMatter(gameState);
+    moveWitherStorm(gameState);
+    maybeAnnounceWitherHole(gameState, storm);
+    if (isInsideBelly(gameState)) {
+      if (storm.defeated) leaveBellyOfTheBeast(gameState);
+      syncWitherStormMusic(gameState);
+      return;
+    }
+    if (isInsideBase(gameState)) {
+      syncWitherStormMusic(gameState);
+      return;
+    }
+    pullPlayerTowardWitherStorm(gameState);
+    pullMonstersTowardWitherStorm(gameState);
+    if (isInsideBelly(gameState)) {
+      syncWitherStormMusic(gameState);
+      return;
+    }
+    applyWitherStormContact(gameState);
+    maybeFallIntoWitherHole(gameState);
+    syncWitherStormMusic(gameState);
+  }
+
+  function hitWitherStormAt(gameState, x, y) {
+    const storm = activeWitherStorm(gameState);
+    if (!storm || !isInPlayerReach(gameState, x, y)) return false;
+
+    if (isInsideBelly(gameState)) {
+      const tile = getActiveTile(gameState, x, y);
+      if (!isBellyCoreTile(tile)) return false;
+      return strikeBellyCore(gameState);
+    }
+
+    if (isWitherStormHoleOpen(storm) && isWitherStormCore(gameState, x, y)) {
+      setToast(gameState, "The command block is down the hole");
+      return true;
+    }
+
+    const core = isWitherStormCore(gameState, x, y);
+    const head = isWitherStormHead(gameState, x, y);
+    const onMass = witherStormCovers(gameState, x, y);
+    if (!core && !head && !onMass) return false;
+    if (!canActWithHealth(gameState)) return false;
+    if (isWitherStormDormant(storm)) {
+      setToast(gameState, "Still forming — 0/5. It wakes at 5");
+      return true;
+    }
+
+    const hidden = isWitherStormCoreHidden(storm);
+    if (!core) {
+      if (hidden && witherStormCovers(gameState, x, y)) {
+        setToast(gameState, "The command block is buried in the storm");
+        return true;
+      }
+      if (!head) return false;
+    }
+
+    const tool = gameState.activeTool || "hand";
+    const sword = GameData.monsters?.swordTool || "ironSword";
+    const raw =
+      tool === sword
+        ? core
+          ? 14
+          : 4
+        : core
+          ? 3
+          : 1;
+    const prot = witherStormProtection(storm);
+    const damage = Math.max(1, raw - prot);
+
+    storm.hp = Math.max(0, storm.hp - damage);
+    applyHungerCost(gameState, hungerActionCost());
+
+    if (storm.hp <= 0) {
+      defeatWitherStorm(gameState);
+    } else if (head && !core) {
+      setToast(
+        gameState,
+        `Head strike — buried core ${storm.hp}/${storm.maxHp} (${prot} prot)`
+      );
+    } else {
+      setToast(
+        gameState,
+        hidden
+          ? `You found the core! ${storm.hp}/${storm.maxHp} (${prot} prot)`
+          : `Command block ${storm.hp}/${storm.maxHp} (${prot} prot)`
+      );
+    }
+    return true;
+  }
+
+  function syncStormHud() {
+    const chrome = document.getElementById("storm-chrome");
+    if (!chrome) return;
+    const storm = activeWitherStorm(state);
+    const show = Boolean(playActive && storm);
+    if (!show) {
+      chrome.hidden = true;
+      chrome.classList.remove("is-on");
+      syncWitherStormMusic(state);
+      return;
+    }
+    const info = witherStormLiveStats(storm);
+    const maxHp = Math.max(1, storm.maxHp || WITHER_WAKE_HP);
+    const pct = Math.max(0, Math.min(100, Math.round((storm.hp / maxHp) * 100)));
+    const icon = document.getElementById("storm-hud-icon");
+    const name = document.getElementById("storm-hud-name");
+    const fill = document.getElementById("storm-hud-fill");
+    const hpEl = document.getElementById("storm-hud-hp");
+    const hud = document.getElementById("storm-hud");
+    chrome.setAttribute("data-phase", isWitherStormDormant(storm) ? "1" : String(Math.min(4, 2 + info.tear)));
+    chrome.setAttribute("data-tear", String(info.tear));
+    chrome.classList.toggle("is-dormant", isWitherStormDormant(storm));
+    const hidden = isWitherStormCoreHidden(storm);
+    const hole = isWitherStormHoleOpen(storm);
+    const inBelly = isInsideBelly(state);
+    if (icon) {
+      icon.textContent = hole ? "🕳️" : hidden || info.tiles >= 2 ? "💀" : "💠";
+    }
+    if (name) {
+      name.textContent = inBelly
+        ? "Belly of the Beast"
+        : `Wither Storm · ${info.name}`;
+    }
+    if (fill) fill.style.width = `${pct}%`;
+    if (hpEl) hpEl.textContent = `${storm.hp}/${maxHp}`;
+    if (hud) {
+      hud.title = isWitherStormDormant(storm)
+        ? "Forming — 0/5. Wakes at 5. It will not pull, grow, or move until then."
+        : inBelly
+          ? `Inside the Belly of the Beast — 50×50 maze. Halls do not hurt you. Strike the core to start its phases.`
+          : `${info.name} — ${storm.hp}/${maxHp} · ${info.protection} prot · ${info.tiles} tiles. ${
+              hole
+                ? "A hole has opened in the core. Walk in."
+                : hidden
+                  ? "Command block buried."
+                  : "Strike the core."
+            }`;
+    }
+    chrome.hidden = false;
+    if (!chrome.classList.contains("is-on")) {
+      requestAnimationFrame(() => chrome.classList.add("is-on"));
+    }
+    syncWitherStormMusic(state);
   }
 
   function currentGoal(state) {
@@ -8399,13 +10925,18 @@ window.IslandFoundry = (() => {
   let lightningWarnCell = null;
   let raf = 0;
   let last = 0;
+  let bellyCombatAcc = 0;
   let clockTimer = 0;
   let root = null;
   let bound = false;
   let poweredTilesCache = new Set();
-  let openSmelter = null; // { x, y } of open smelter UI
+  let openSmelter = null; // { x, y } of open smelter UI, or { workroom: true }
+  let workroomStationMode = "craft"; // "craft" | "smelt"
+  let workroomSwapTimer = 0;
+  let workroomLeverDrag = null;
   let openGenerator = null; // { x, y } of open generator UI
   let openPlayerInv = false;
+  let openStrangeNote = false;
   let openCraftTable = null; // { x, y } outdoor table, or { workroom: true }
   let openKitchen = false;
   let kitchenDrag = null; // { from: "inv"|"kitchen", itemId, count, slotIndex? }
@@ -8440,6 +10971,7 @@ window.IslandFoundry = (() => {
 
   function findOpenSmelterMachine() {
     if (!state || !openSmelter) return null;
+    if (openSmelter.workroom) return ensureWorkroomSmelter(state);
     const m = state.machines.find(
       (machine) =>
         machine.type === "smelter" &&
@@ -8449,30 +10981,102 @@ window.IslandFoundry = (() => {
     return m ? ensureSmelterShape(m) : null;
   }
 
+  function smelterUiRoot() {
+    if (openSmelter?.workroom) {
+      return {
+        modal: document.getElementById("craft-table-modal"),
+        inputGrid: document.getElementById("workroom-smelter-input-grid"),
+        outGrid: document.getElementById("workroom-smelter-output-grid"),
+        invGrid: null,
+        fuelSlot: document.getElementById("workroom-smelter-fuel-slot"),
+        energyBar: document.getElementById("workroom-smelter-energy-bar"),
+        energyValue: document.getElementById("workroom-smelter-energy-value"),
+        progressBar: document.getElementById("workroom-smelter-progress-bar"),
+        progressLabel: document.getElementById("workroom-smelter-progress-label"),
+        progressTime: document.getElementById("workroom-smelter-progress-time"),
+      };
+    }
+    return {
+      modal: document.getElementById("smelter-modal"),
+      inputGrid: document.getElementById("smelter-input-grid"),
+      outGrid: document.getElementById("smelter-output-grid"),
+      invGrid: document.getElementById("smelter-inv-grid"),
+      fuelSlot: document.getElementById("smelter-fuel-slot"),
+      energyBar: document.getElementById("smelter-energy-bar"),
+      energyValue: document.getElementById("smelter-energy-value"),
+      progressBar: document.getElementById("smelter-progress-bar"),
+      progressLabel: document.getElementById("smelter-progress-label"),
+      progressTime: document.getElementById("smelter-progress-time"),
+    };
+  }
+
+  function isWorkroomSmeltMode() {
+    return Boolean(openCraftTable?.workroom && workroomStationMode === "smelt");
+  }
+
+  function strangeNoteDisplay(gameState = state) {
+    if (!gameState?.baseNoteRead) {
+      return { name: "Strange Note", icon: "📜" };
+    }
+    const pct = sixSevenRealmProgress(gameState);
+    if (pct >= 92) return { name: "6-7", icon: "6-7" };
+    if (pct >= 70) return { name: "Corrupted Tracker", icon: "📛" };
+    if (pct >= 40) return { name: "Tainted Note", icon: "📑" };
+    return { name: "6-7 Tracker", icon: "📟" };
+  }
+
+  function itemDisplay(itemId) {
+    const item = GameData.getItem(itemId);
+    if (itemId === "strangeNote" && !window.KeaghanApp?.isSixSevenModInstalled?.()) {
+      return { ...item, ...strangeNoteDisplay() };
+    }
+    return item;
+  }
+
+  function sixSevenRealmProgress(gameState = state) {
+    if (!gameState) return 0;
+    const t = ensureTvForbidden(gameState);
+    let p = 0;
+    if (gameState.baseNoteCollected || hasStrangeNote(gameState)) p += 6;
+    if (gameState.baseNoteRead) p += 6;
+    if (isTvForbiddenCodeArmed()) p += 8;
+    if (t.charcoal) p += 14;
+    if (t.wires) p += 14;
+    if (t.passcode) p += 14;
+    if (t.opened) p += 18;
+    const firstOff = Math.abs(tvChannelFirst - 5);
+    const lastOff = Math.abs(tvChannelLast - 6);
+    const channelScore = Math.max(0, 1 - (firstOff + lastOff) / 8);
+    p += Math.round(20 * channelScore);
+    if (t.opened && tvChannelFirst === 5 && tvChannelLast === 6) p = 100;
+    return Math.max(0, Math.min(100, p));
+  }
+
   function slotHtml(itemId, count, emptyLabel = "") {
     if (!itemId || count < 1) {
       return `<span class="smelter-slot__icon">${emptyLabel}</span>`;
     }
-    const item = GameData.getItem(itemId);
+    const item = itemDisplay(itemId);
     return `<span class="smelter-slot__icon">${item.icon}</span><span class="smelter-slot__count">${count}</span>`;
   }
 
   function refreshSmelterProgress() {
-    const modal = document.getElementById("smelter-modal");
-    if (!modal || modal.hidden || smelterDrag) return;
+    const ui = smelterUiRoot();
+    if (!ui.modal || ui.modal.hidden || smelterDrag) return;
     const m = findOpenSmelterMachine();
     if (!m) return;
 
-    const energyBar = document.getElementById("smelter-energy-bar");
-    const energyValue = document.getElementById("smelter-energy-value");
-    const progressBar = document.getElementById("smelter-progress-bar");
-    const progressLabel = document.getElementById("smelter-progress-label");
-    const progressTime = document.getElementById("smelter-progress-time");
-    const fuelSlot = document.getElementById("smelter-fuel-slot");
-    const inputGrid = document.getElementById("smelter-input-grid");
+    const energyBar = ui.energyBar;
+    const energyValue = ui.energyValue;
+    const progressBar = ui.progressBar;
+    const progressLabel = ui.progressLabel;
+    const progressTime = ui.progressTime;
+    const fuelSlot = ui.fuelSlot;
+    const inputGrid = ui.inputGrid;
 
-    const electric =
-      (poweredTilesCache || computePoweredTiles(state)).has(tileKey(m.x, m.y));
+    const electric = openSmelter?.workroom
+      ? false
+      : (poweredTilesCache || computePoweredTiles(state)).has(tileKey(m.x, m.y));
     const energyCap = Math.max(
       fuelEnergyValue("coal"),
       fuelEnergyValue("log"),
@@ -8537,18 +11141,18 @@ window.IslandFoundry = (() => {
   }
 
   function renderSmelterUi() {
-    const modal = document.getElementById("smelter-modal");
-    if (!modal || modal.hidden) return;
+    const ui = smelterUiRoot();
+    if (!ui.modal || ui.modal.hidden) return;
     const m = findOpenSmelterMachine();
     if (!m) {
       closeSmelterUi();
       return;
     }
 
-    const invGrid = document.getElementById("smelter-inv-grid");
-    const outGrid = document.getElementById("smelter-output-grid");
-    const inputGrid = document.getElementById("smelter-input-grid");
-    const fuelSlot = document.getElementById("smelter-fuel-slot");
+    const invGrid = ui.invGrid;
+    const outGrid = ui.outGrid;
+    const inputGrid = ui.inputGrid;
+    const fuelSlot = ui.fuelSlot;
 
     // Pockets: show every carried item (no 15-slot cap).
     const stacks = Object.entries(state.inventory).filter(([, n]) => n > 0);
@@ -8606,6 +11210,7 @@ window.IslandFoundry = (() => {
 
   function afterSmelterChange() {
     renderSmelterUi();
+    if (openCraftTable?.workroom) renderActiveBenchUi();
     saveState(state);
     renderInventory();
     refreshTilePowerStyles();
@@ -8698,7 +11303,45 @@ window.IslandFoundry = (() => {
     return moved;
   }
 
-  function applySmelterDrop(target, extra = {}) {
+  function destroySmelterDrag() {
+    if (!smelterDrag) return false;
+    const { from, itemId, count, inIndex, outIndex } = smelterDrag;
+    if (from === "inv") {
+      const n = Math.min(count, state.inventory[itemId] || 0);
+      if (n < 1) return false;
+      removeItem(state, itemId, n);
+      return true;
+    }
+    if (from === "input") {
+      const m = findOpenSmelterMachine();
+      const stack = m?.input?.[inIndex];
+      if (!stack) return false;
+      m.input.splice(inIndex, 1);
+      if (m.smeltingSlot === inIndex) {
+        m.smeltingSlot = -1;
+        m.progressMinutes = 0;
+      } else if (m.smeltingSlot > inIndex) {
+        m.smeltingSlot -= 1;
+      }
+      return true;
+    }
+    if (from === "fuel") {
+      const m = findOpenSmelterMachine();
+      if (!m?.fuelId || m.fuelCount < 1) return false;
+      m.fuelId = null;
+      m.fuelCount = 0;
+      return true;
+    }
+    if (from === "output") {
+      const m = findOpenSmelterMachine();
+      if (!m?.output?.[outIndex]) return false;
+      m.output.splice(outIndex, 1);
+      return true;
+    }
+    return false;
+  }
+
+  function applySmelterDrop(target) {
     if (!smelterDrag || !target) return false;
     const { from, itemId, count, outIndex, inIndex } = smelterDrag;
 
@@ -8722,6 +11365,7 @@ window.IslandFoundry = (() => {
   function clearSmelterDrag() {
     smelterDrag = null;
     document.getElementById("smelter-modal")?.classList.remove("is-dragging");
+    document.getElementById("craft-table-modal")?.classList.remove("is-dragging");
     document.querySelectorAll(".smelter-slot.is-drag-source, .smelter-slot.is-drop-hover").forEach((el) => {
       el.classList.remove("is-drag-source", "is-drop-hover");
     });
@@ -8802,8 +11446,10 @@ window.IslandFoundry = (() => {
   }
 
   function closeSmelterUi() {
+    const wasWorkroom = Boolean(openSmelter?.workroom);
     clearSmelterDrag();
     openSmelter = null;
+    if (wasWorkroom) return;
     const modal = document.getElementById("smelter-modal");
     if (modal) {
       modal.hidden = true;
@@ -9538,6 +12184,207 @@ window.IslandFoundry = (() => {
     return gameState.workroomCraft;
   }
 
+  function ensureWorkroomSmelter(gameState) {
+    if (!gameState) return null;
+    if (!gameState.workroomSmelter || typeof gameState.workroomSmelter !== "object") {
+      gameState.workroomSmelter = makeSmelterMachine(-2, -2);
+    }
+    gameState.workroomSmelter.type = "smelter";
+    gameState.workroomSmelter.x = -2;
+    gameState.workroomSmelter.y = -2;
+    return ensureSmelterShape(gameState.workroomSmelter);
+  }
+
+  function workroomStationFromState(gameState = state) {
+    return gameState?.workroomStation === "smelt" ? "smelt" : "craft";
+  }
+
+  function setWorkroomLeverVisual(mode, busy = false) {
+    const lever = document.getElementById("workroom-lever");
+    const handle = document.getElementById("workroom-lever-handle");
+    if (!lever) return;
+    lever.classList.toggle("is-craft", mode === "craft");
+    lever.classList.toggle("is-smelt", mode === "smelt");
+    lever.classList.toggle("is-busy", busy);
+    if (handle) {
+      handle.setAttribute("aria-valuenow", mode === "smelt" ? "0" : "100");
+      handle.setAttribute("aria-valuetext", mode === "smelt" ? "Smelt" : "Craft");
+      handle.style.top = "";
+    }
+  }
+
+  function syncWorkroomWellHeight() {
+    const well = document.getElementById("workroom-well");
+    const craft = document.getElementById("workroom-deck-craft");
+    const smelt = document.getElementById("workroom-deck-smelt");
+    if (!well || !craft || !smelt) return;
+    const h = Math.max(craft.scrollHeight, smelt.scrollHeight, 280);
+    well.style.setProperty("--workroom-well-height", `${h}px`);
+  }
+
+  function settleWorkroomStation(mode, { openSmelt = true } = {}) {
+    workroomStationMode = mode === "smelt" ? "smelt" : "craft";
+    if (state) state.workroomStation = workroomStationMode;
+    const well = document.getElementById("workroom-well");
+    well?.classList.remove("is-nudge", "is-drop", "is-steam", "is-busy");
+    well?.classList.toggle("is-craft", workroomStationMode === "craft");
+    well?.classList.toggle("is-smelt", workroomStationMode === "smelt");
+    well?.classList.add("is-settled");
+    setWorkroomLeverVisual(workroomStationMode, false);
+    if (workroomStationMode === "smelt" && openSmelt) {
+      ensureWorkroomSmelter(state);
+      openSmelter = { workroom: true };
+      renderSmelterUi();
+    } else if (openSmelter?.workroom) {
+      openSmelter = null;
+    }
+    syncWorkroomWellHeight();
+  }
+
+  function requestWorkroomStation(nextMode) {
+    const next = nextMode === "smelt" ? "smelt" : "craft";
+    if (!openCraftTable?.workroom) return;
+    if (workroomSwapTimer || next === workroomStationMode) {
+      setWorkroomLeverVisual(workroomStationMode, Boolean(workroomSwapTimer));
+      return;
+    }
+    playWorkroomStationSwap(next);
+  }
+
+  function playWorkroomStationSwap(nextMode) {
+    const well = document.getElementById("workroom-well");
+    if (!well) {
+      settleWorkroomStation(nextMode);
+      return;
+    }
+    window.clearTimeout(workroomSwapTimer);
+
+    if (nextMode === "smelt") {
+      ensureWorkroomSmelter(state);
+      openSmelter = { workroom: true };
+      renderSmelterUi();
+    }
+    well.classList.remove("is-settled");
+    syncWorkroomWellHeight();
+
+    well.classList.add("is-busy", "is-steam", "is-nudge");
+    setWorkroomLeverVisual(nextMode, true);
+    window.KeaghanSfx?.playMenuClick?.();
+    setToast(
+      state,
+      nextMode === "smelt" ? "Platform hiss — smelter coming in" : "Platform hiss — crafting returning"
+    );
+
+    const after = (ms, fn) => {
+      workroomSwapTimer = window.setTimeout(fn, ms);
+    };
+
+    after(180, () => {
+      well.classList.add("is-drop");
+      after(320, () => {
+        well.classList.toggle("is-smelt", nextMode === "smelt");
+        well.classList.toggle("is-craft", nextMode === "craft");
+        after(600, () => {
+          well.classList.remove("is-nudge", "is-drop");
+          after(500, () => {
+            well.classList.remove("is-steam");
+            workroomSwapTimer = 0;
+            settleWorkroomStation(nextMode);
+            if (nextMode === "smelt") {
+              setToast(state, "Workroom smelter — logs to charcoal, ore to ingots");
+            } else {
+              setToast(state, "Workroom bench — 3×3 craft");
+              renderActiveBenchUi();
+            }
+            renderHud();
+            if (state) saveState(state);
+          });
+        });
+      });
+    });
+  }
+
+  function bindWorkroomLever() {
+    const modal = document.getElementById("craft-table-modal");
+    const handle = document.getElementById("workroom-lever-handle");
+    const track = document.getElementById("workroom-lever-track");
+    if (!modal || !handle || !track || modal.dataset.workroomLeverBound) return;
+    modal.dataset.workroomLeverBound = "1";
+
+    const ratioFromClientY = (clientY) => {
+      const rect = track.getBoundingClientRect();
+      const travel = Math.max(1, rect.height - handle.offsetHeight - 8);
+      const fromTop = clientY - rect.top - 4 - handle.offsetHeight / 2;
+      return Math.max(0, Math.min(1, fromTop / travel));
+    };
+
+    const applyHandleRatio = (ratio) => {
+      const travel = Math.max(0, track.clientHeight - handle.offsetHeight - 8);
+      handle.style.top = `${4 + ratio * travel}px`;
+      handle.setAttribute("aria-valuenow", String(Math.round((1 - ratio) * 100)));
+    };
+
+    const endDrag = (commit) => {
+      const lever = document.getElementById("workroom-lever");
+      lever?.classList.remove("is-dragging");
+      if (!workroomLeverDrag) return;
+      const ratio = workroomLeverDrag.ratio ?? 0;
+      const startRatio = workroomLeverDrag.startRatio ?? ratio;
+      workroomLeverDrag = null;
+      handle.style.top = "";
+      if (!commit) {
+        setWorkroomLeverVisual(workroomStationMode, Boolean(workroomSwapTimer));
+        return;
+      }
+      if (Math.abs(ratio - startRatio) < 0.12) {
+        requestWorkroomStation(workroomStationMode === "smelt" ? "craft" : "smelt");
+        return;
+      }
+      requestWorkroomStation(ratio >= 0.5 ? "smelt" : "craft");
+    };
+
+    modal.addEventListener("pointerdown", (event) => {
+      if (!openCraftTable?.workroom || workroomSwapTimer) return;
+      const onHandle = event.target.closest("#workroom-lever-handle");
+      const onTrack = event.target.closest("#workroom-lever-track");
+      if (!onHandle && !onTrack) return;
+      event.preventDefault();
+      handle.setPointerCapture?.(event.pointerId);
+      const ratio = ratioFromClientY(event.clientY);
+      workroomLeverDrag = { ratio, startRatio: ratio };
+      document.getElementById("workroom-lever")?.classList.add("is-dragging");
+      applyHandleRatio(ratio);
+    });
+
+    modal.addEventListener("pointermove", (event) => {
+      if (!workroomLeverDrag) return;
+      const ratio = ratioFromClientY(event.clientY);
+      workroomLeverDrag.ratio = ratio;
+      applyHandleRatio(ratio);
+    });
+
+    modal.addEventListener("pointerup", () => {
+      if (!workroomLeverDrag) return;
+      endDrag(true);
+    });
+
+    modal.addEventListener("pointercancel", () => endDrag(false));
+
+    handle.addEventListener("keydown", (event) => {
+      if (!openCraftTable?.workroom || workroomSwapTimer) return;
+      if (event.key === "ArrowUp" || event.key === "Home") {
+        event.preventDefault();
+        requestWorkroomStation("craft");
+      } else if (event.key === "ArrowDown" || event.key === "End") {
+        event.preventDefault();
+        requestWorkroomStation("smelt");
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        requestWorkroomStation(workroomStationMode === "smelt" ? "craft" : "smelt");
+      }
+    });
+  }
+
   function findCraftTableMachine() {
     if (!state || !openCraftTable) return null;
     if (openCraftTable.workroom) return ensureWorkroomCraft(state);
@@ -9691,6 +12538,10 @@ window.IslandFoundry = (() => {
     const recipe = GameData.recipes.find((r) => r.id === recipeId);
     if (!bench || !recipe) return false;
 
+    if (isWorkroomSmeltMode()) {
+      setToast(state, "Flip the workroom lever up to Craft first");
+      return false;
+    }
     if (recipe.atStation && bench.mode !== "table") {
       setToast(state, "Craft that in the Base Workroom (3×3)");
       return false;
@@ -9771,6 +12622,7 @@ window.IslandFoundry = (() => {
     }
     openPlayerInv = false;
     hideModal("player-inv-modal");
+    syncTvDock();
   }
 
   function openPlayerInvUi() {
@@ -9786,12 +12638,22 @@ window.IslandFoundry = (() => {
     playerCraftGrid = normalizeCraftGrid(playerCraftGrid, 4);
     showModal("player-inv-modal");
     renderActiveBenchUi();
+    syncTvDock();
     renderHud();
     setToast(state, "Inventory — 2×2 pocket craft (Tab to close · E recipes)");
   }
 
   function togglePlayerInvUi() {
     if (!state || !playActive) return;
+    if (
+      openTvPrompt &&
+      tvPhase === "watch" &&
+      (isTvSixSevenFinale() || tvSixSevenOutroActive)
+    ) {
+      setToast(state, "6-7 has the last word…");
+      renderHud();
+      return;
+    }
     if (openPlayerInv) {
       closePlayerInvUi();
       renderInventory();
@@ -9804,6 +12666,9 @@ window.IslandFoundry = (() => {
   }
 
   function closeCraftTableUi() {
+    window.clearTimeout(workroomSwapTimer);
+    workroomSwapTimer = 0;
+    workroomLeverDrag = null;
     const m = findCraftTableMachine();
     if (m) {
       ensureCraftTableShape(m);
@@ -9813,6 +12678,7 @@ window.IslandFoundry = (() => {
         saveState(state);
       }
     }
+    if (openSmelter?.workroom) openSmelter = null;
     openCraftTable = null;
     hideModal("craft-table-modal");
   }
@@ -9834,7 +12700,10 @@ window.IslandFoundry = (() => {
     const m = findCraftTableMachine();
     if (m) ensureCraftTableShape(m);
     showModal("craft-table-modal");
+    settleWorkroomStation(workroomStationFromState(state), { openSmelt: true });
     renderActiveBenchUi();
+    if (workroomStationMode === "smelt") renderSmelterUi();
+    requestAnimationFrame(() => syncWorkroomWellHeight());
     renderHud();
     setToast(state, toastText);
   }
@@ -9843,8 +12712,14 @@ window.IslandFoundry = (() => {
   function openWorkroomCraftUi() {
     if (!state || !isInsideBase(state)) return;
     ensureWorkroomCraft(state);
+    ensureWorkroomSmelter(state);
     openCraftTable = { workroom: true };
-    prepareCraftTableModal("Workroom — 3×3 workbench · E recipes");
+    const mode = workroomStationFromState(state);
+    prepareCraftTableModal(
+      mode === "smelt"
+        ? "Workroom smelter — flip the lever up to craft"
+        : "Workroom — 3×3 workbench · lever down to smelt · E recipes"
+    );
   }
 
   function kitchenSlotCount() {
@@ -10189,9 +13064,9 @@ window.IslandFoundry = (() => {
     return GameData.storageRoom?.stackMax ?? 50;
   }
 
-  /** Storage room: materials/tools — not food, not the Base Key. */
+  /** Storage room: materials/tools — not food, not the Base Key, not the hall note. */
   function canStoreInStorage(itemId) {
-    if (!itemId || itemId === "baseKey") return false;
+    if (!itemId || itemId === "baseKey" || itemId === "strangeNote") return false;
     return !isFoodItem(itemId);
   }
 
@@ -10323,6 +13198,7 @@ window.IslandFoundry = (() => {
           const name = GameData.getItem(stack.id).name;
           let why = `${name} — store in crates`;
           if (stack.id === "baseKey") why = `${name} — hang on the key hook (can't store)`;
+          else if (stack.id === "strangeNote") why = `${name} — keep this on you`;
           else if (isFoodItem(stack.id)) why = `${name} — keep in the kitchen`;
           return `<button type="button" class="smelter-slot${ok ? "" : " is-empty"}" data-storage-inv-slot="${index}" data-bag-slot="${index}" draggable="${ok ? "true" : "false"}" title="${why}">${slotHtml(stack.id, stack.count)}</button>`;
         })
@@ -10380,6 +13256,11 @@ window.IslandFoundry = (() => {
         if (!stack) return;
         if (stack.id === "baseKey") {
           setToast(state, "Base Key stays on the hook — can't store it");
+          renderHud();
+          return;
+        }
+        if (stack.id === "strangeNote") {
+          setToast(state, "The note stays with you");
           renderHud();
           return;
         }
@@ -10569,6 +13450,7 @@ window.IslandFoundry = (() => {
     "bucket",
     "waterBucket",
     "ice",
+    "strangeNote",
   ];
 
   const GUIDE_TOOLS = ["woodPick", "stonePick", "ironPick", "ironSword"];
@@ -10599,6 +13481,7 @@ window.IslandFoundry = (() => {
     const list = lists[category] || GUIDE_ITEMS;
     const seen = new Set();
     return list.filter((id) => {
+      if (id === "strangeNote" && isSixSevenNoteGone()) return false;
       if (!GameData.getItemGuide(id) || seen.has(id)) return false;
       seen.add(id);
       return true;
@@ -10885,6 +13768,11 @@ window.IslandFoundry = (() => {
         renderHud();
         return;
       }
+      if (openPlayerInv && openTvPrompt) {
+        closePlayerInvUi();
+        renderHud();
+        return;
+      }
       if (openTvPrompt) {
         if (isTvSixSevenTrapped()) {
           setToast(state, "6-7 won't let you leave…");
@@ -10893,6 +13781,10 @@ window.IslandFoundry = (() => {
         }
         closeTvPrompt();
         renderHud();
+        return;
+      }
+      if (openStrangeNote) {
+        closeStrangeNoteUi();
         return;
       }
       if (openRecipes) {
@@ -11260,17 +14152,23 @@ window.IslandFoundry = (() => {
     const invGrid = document.getElementById(bench.invId);
     if (invGrid) {
       ensureBag(state);
+      const smeltInv = isWorkroomSmeltMode();
       invGrid.innerHTML = state.bag
         .map((stack, index) => {
           if (!stack) {
-            return `<button type="button" class="smelter-slot is-empty" data-bag-slot="${index}">${slotHtml(null, 0)}</button>`;
+            return `<button type="button" class="smelter-slot is-empty" data-bag-slot="${index}"${
+              smeltInv ? ' data-smelter-drop="inv"' : ""
+            }>${slotHtml(null, 0)}</button>`;
           }
           const foodHint =
             isFoodItem(stack.id) && !canAcceptFood(state)
               ? " · Full (90%+) — drag to Eat won't work"
               : "";
-          const name = GameData.getItem(stack.id).name;
-          return `<button type="button" class="smelter-slot" data-bag-slot="${index}" draggable="true" title="${name}${foodHint}">${slotHtml(stack.id, stack.count)}</button>`;
+          const name = itemDisplay(stack.id).name;
+          const smeltAttrs = smeltInv
+            ? ` data-smelter-drop="inv" data-smelter-inv="${stack.id}"`
+            : "";
+          return `<button type="button" class="smelter-slot" data-bag-slot="${index}" draggable="true" title="${name}${foodHint}"${smeltAttrs}>${slotHtml(stack.id, stack.count)}</button>`;
         })
         .join("");
     }
@@ -11293,6 +14191,121 @@ window.IslandFoundry = (() => {
     }
   }
 
+  function sixSevenTrackerHint(pct) {
+    if (pct >= 100) return "6-7.";
+    if (pct >= 80) return "The realm is listening.";
+    if (pct >= 50) return "The pairing is almost named.";
+    if (pct >= 20) return "The hatch still has work for you.";
+    return "A sealed frequency waits in the living room.";
+  }
+
+  function sixSevenCorruptTier(pct) {
+    if (pct >= 90) return 4;
+    if (pct >= 70) return 3;
+    if (pct >= 45) return 2;
+    if (pct >= 20) return 1;
+    return 0;
+  }
+
+  function renderStrangeNoteUi() {
+    const letter = document.getElementById("note-letter");
+    const tracker = document.getElementById("note-tracker");
+    const title = document.getElementById("note-title");
+    const sheet = document.getElementById("note-sheet");
+    const fill = document.getElementById("note-tracker-fill");
+    const pctEl = document.getElementById("note-tracker-pct");
+    const hint = document.getElementById("note-tracker-hint");
+    if (!state) return;
+    const read = Boolean(state.baseNoteRead);
+    if (letter) letter.hidden = read;
+    if (tracker) tracker.hidden = !read;
+    const shown = strangeNoteDisplay(state);
+    if (title) title.textContent = shown.name;
+    if (!read) {
+      sheet?.setAttribute("data-corrupt", "0");
+      return;
+    }
+    const pct = sixSevenRealmProgress(state);
+    const tier = sixSevenCorruptTier(pct);
+    sheet?.setAttribute("data-corrupt", String(tier));
+    if (fill) fill.style.width = `${pct}%`;
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    if (hint) hint.textContent = sixSevenTrackerHint(pct);
+    syncRealmHud();
+  }
+
+  function syncRealmHud() {
+    const chrome = document.getElementById("realm-chrome");
+    if (!chrome) return;
+    const show = Boolean(playActive && state?.baseNoteRead && !isSixSevenNoteGone());
+    if (!show) {
+      chrome.hidden = true;
+      chrome.classList.remove("is-on");
+      return;
+    }
+
+    const pct = sixSevenRealmProgress(state);
+    const shown = strangeNoteDisplay(state);
+    const icon = document.getElementById("realm-hud-icon");
+    const name = document.getElementById("realm-hud-name");
+    const fill = document.getElementById("realm-hud-fill");
+    const pctEl = document.getElementById("realm-hud-pct");
+    const hud = document.getElementById("realm-hud");
+    chrome.setAttribute("data-corrupt", String(sixSevenCorruptTier(pct)));
+    if (icon) icon.textContent = shown.icon;
+    if (name) name.textContent = shown.name;
+    if (fill) fill.style.width = `${pct}%`;
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    if (hud) hud.title = `${shown.name} — ${pct}% · click to open`;
+    chrome.hidden = false;
+    if (!chrome.classList.contains("is-on")) {
+      requestAnimationFrame(() => chrome.classList.add("is-on"));
+    }
+    syncSixSevenCrowdTalks();
+  }
+
+  function openStrangeNoteUi() {
+    if (!state || isSixSevenNoteGone() || !hasStrangeNote(state)) return;
+    openStrangeNote = true;
+    renderStrangeNoteUi();
+    showModal("note-modal");
+    window.KeaghanSfx?.playMenuClick?.();
+  }
+
+  function closeStrangeNoteUi() {
+    if (!openStrangeNote) {
+      hideModal("note-modal");
+      return;
+    }
+    if (state && hasStrangeNote(state) && !state.baseNoteRead) {
+      const letter = document.getElementById("note-letter");
+      if (letter && !letter.hidden) {
+        state.baseNoteRead = true;
+        saveState(state);
+        setToast(state, "The note is no longer a note.");
+      }
+    }
+    openStrangeNote = false;
+    hideModal("note-modal");
+    if (openPlayerInv) renderActiveBenchUi();
+    renderHud();
+    syncRealmHud();
+  }
+
+  function bindStrangeNoteModal() {
+    const modal = document.getElementById("note-modal");
+    if (!modal || modal.dataset.bound) return;
+    modal.dataset.bound = "1";
+    modal.addEventListener("click", (event) => {
+      if (event.target.closest("[data-note-close]")) closeStrangeNoteUi();
+    });
+    const hud = document.getElementById("realm-hud");
+    hud?.addEventListener("click", () => {
+      if (!playActive || isSixSevenNoteGone() || !state?.baseNoteRead) return;
+      if (hasStrangeNote(state)) openStrangeNoteUi();
+    });
+  }
+
   function bindBenchModal(modalId, closeAttr, isOpen) {
     const modal = document.getElementById(modalId);
     if (!modal) return;
@@ -11306,6 +14319,17 @@ window.IslandFoundry = (() => {
         return;
       }
       if (!isOpen()) return;
+      if (isWorkroomSmeltMode()) {
+        if (
+          event.target.closest("[data-player-craft]") ||
+          event.target.closest("[data-table-craft]") ||
+          event.target.closest("#player-craft-result, #table-craft-result") ||
+          event.target.closest("[data-craft-grid]") ||
+          event.target.closest("[data-smelter-inv], [data-smelter-in], [data-smelter-out], [data-smelter-slot]")
+        ) {
+          return;
+        }
+      }
 
       const recipeBtn =
         event.target.closest("[data-player-craft]") || event.target.closest("[data-table-craft]");
@@ -11345,9 +14369,17 @@ window.IslandFoundry = (() => {
       }
 
       const bagIndex = event.target.closest("[data-bag-slot]")?.dataset.bagSlot;
+      if (bagIndex != null && bagIndex !== "" && isWorkroomSmeltMode()) {
+        return;
+      }
       if (bagIndex != null && bagIndex !== "") {
         ensureBag(state);
-        if (state.bag[Number(bagIndex)]) {
+        const stack = state.bag[Number(bagIndex)];
+        if (stack?.id === "strangeNote") {
+          openStrangeNoteUi();
+          return;
+        }
+        if (stack) {
           if (moveBagSlotToCraft(Number(bagIndex), 1) > 0) afterBenchChange();
           else setToast(state, "Crafting grid is full");
         }
@@ -11357,6 +14389,9 @@ window.IslandFoundry = (() => {
     modal.addEventListener("dragstart", (event) => {
       const slot = event.target.closest(".smelter-slot");
       if (!slot || slot.disabled || !isOpen()) return;
+      if (isWorkroomSmeltMode() && (slot.dataset.smelterInv || slot.dataset.smelterIn || slot.dataset.smelterOut || slot.dataset.smelterSlot)) {
+        return;
+      }
       const bench = getActiveBench();
       if (!bench) return;
       ensureBag(state);
@@ -11408,7 +14443,7 @@ window.IslandFoundry = (() => {
     });
 
     modal.addEventListener("dragover", (event) => {
-      if (!craftDrag) return;
+      if (smelterDrag || !craftDrag) return;
       const drop = event.target.closest(
         "[data-craft-grid], [data-bag-slot], [data-inv-trash], [data-inv-eat], [data-inv-cool], [data-inv-equip], .craft-station-col--inv, .craft-grid"
       );
@@ -11443,6 +14478,7 @@ window.IslandFoundry = (() => {
     });
 
     modal.addEventListener("drop", (event) => {
+      if (smelterDrag) return;
       event.preventDefault();
       if (!craftDrag || !isOpen()) {
         craftDrag = null;
@@ -11548,11 +14584,14 @@ window.IslandFoundry = (() => {
   }
 
   function bindPlayerInvUi() {
+    bindStrangeNoteModal();
     bindBenchModal("player-inv-modal", "data-player-inv-close", () => openPlayerInv);
   }
 
   function bindCraftTableUi() {
     bindBenchModal("craft-table-modal", "data-craft-table-close", () => Boolean(openCraftTable));
+    bindWorkroomLever();
+    bindSmelterEvents(document.getElementById("craft-table-modal"));
   }
 
   function bindRecipesUi() {
@@ -11621,11 +14660,16 @@ window.IslandFoundry = (() => {
   }
 
   function bindSmelterUi() {
-    const modal = document.getElementById("smelter-modal");
-    if (!modal) return;
+    bindSmelterEvents(document.getElementById("smelter-modal"));
+  }
+
+  function bindSmelterEvents(modal) {
+    if (!modal || modal.dataset.smelterEventsBound) return;
+    modal.dataset.smelterEventsBound = "1";
 
     modal.addEventListener("click", (event) => {
       if (smelterDrag) return;
+      if (!findOpenSmelterMachine()) return;
       if (event.target.closest("[data-smelter-close]")) {
         closeSmelterUi();
         return;
@@ -11695,36 +14739,52 @@ window.IslandFoundry = (() => {
 
     modal.addEventListener("dragover", (event) => {
       const drop = event.target.closest(
-        "[data-smelter-drop], [data-smelter-slot], .smelter-col--inv, .smelter-col--input"
+        "[data-smelter-drop], [data-smelter-slot], [data-inv-trash], .smelter-col--inv, .smelter-col--input, .craft-station-col--inv"
       );
       if (!drop || !smelterDrag) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = "move";
       modal
-        .querySelectorAll(".smelter-slot.is-drop-hover, .smelter-col--inv.is-drop-hover, .smelter-col--input.is-drop-hover")
+        .querySelectorAll(
+          ".smelter-slot.is-drop-hover, .smelter-col--inv.is-drop-hover, .smelter-col--input.is-drop-hover, .inv-trash.is-drop-hover, .craft-station-col--inv.is-drop-hover"
+        )
         .forEach((el) => el.classList.remove("is-drop-hover"));
+      const trash = event.target.closest("[data-inv-trash]");
       const slot = event.target.closest(".smelter-slot");
-      if (slot) slot.classList.add("is-drop-hover");
-      else if (drop.classList?.contains("smelter-col--inv") || drop.classList?.contains("smelter-col--input")) {
+      if (trash) trash.classList.add("is-drop-hover");
+      else if (slot) slot.classList.add("is-drop-hover");
+      else if (
+        drop.classList?.contains("smelter-col--inv") ||
+        drop.classList?.contains("smelter-col--input") ||
+        drop.classList?.contains("craft-station-col--inv")
+      ) {
         drop.classList.add("is-drop-hover");
       }
     });
 
     modal.addEventListener("dragleave", (event) => {
-      const slot = event.target.closest(".smelter-slot, .smelter-col--inv, .smelter-col--input");
+      const slot = event.target.closest(
+        ".smelter-slot, .smelter-col--inv, .smelter-col--input, .inv-trash, .craft-station-col--inv"
+      );
       if (slot) slot.classList.remove("is-drop-hover");
     });
 
     modal.addEventListener("drop", (event) => {
+      if (!smelterDrag) return;
       event.preventDefault();
       const slot = event.target.closest(".smelter-slot");
       const dropZone = event.target.closest("[data-smelter-drop]");
+      const trash = event.target.closest("[data-inv-trash]");
       let target = dropZone?.dataset.smelterDrop || null;
       if (!target && slot?.dataset.smelterSlot) target = slot.dataset.smelterSlot;
       if (!target && event.target.closest(".smelter-col--inv")) target = "inv";
+      if (!target && event.target.closest(".craft-station-col--inv")) target = "inv";
       if (!target && event.target.closest(".smelter-col--input")) target = "input";
 
-      if (target && applySmelterDrop(target)) afterSmelterChange();
+      let changed = false;
+      if (trash) changed = destroySmelterDrag();
+      else if (target) changed = applySmelterDrop(target);
+      if (changed) afterSmelterChange();
       clearSmelterDrag();
     });
 
@@ -11752,6 +14812,18 @@ window.IslandFoundry = (() => {
   }
 
   function tileClass(tile) {
+    if (state && isInsideBelly(state) && tile) {
+      let cls = "tile tile--belly";
+      if (tile.kind === "wall") cls += " tile--belly-wall";
+      else if (tile.kind === "exit") cls += " tile--belly-exit";
+      else if (tile.feature === "core" || tile.kind === "core") cls += " tile--belly-core";
+      else if (tile.room === "littleHall") cls += " tile--belly-hall-little";
+      else if (tile.room === "bigHall") cls += " tile--belly-hall-big";
+      else if (tile.room === "coreRoom") cls += " tile--belly-room";
+      else cls += " tile--belly-floor";
+      if (!isInPlayerReach(state, tile.x, tile.y)) cls += " tile--out-of-reach";
+      return cls;
+    }
     if (state && isInsideBase(state) && tile?.kind) {
       const tier = Math.max(1, Math.floor(Number(tile.tier) || 1));
       let cls = `tile tile--interior tile--interior-${tile.kind} tile--interior-t${tier}`;
@@ -11761,6 +14833,7 @@ window.IslandFoundry = (() => {
           ? " tile--interior-key-hook tile--interior-key-hook--held"
           : " tile--interior-key-hook";
       }
+      if (tile.feature === "note") cls += " tile--interior-note";
       if (!isInPlayerReach(state, tile.x, tile.y)) cls += " tile--out-of-reach";
       return cls;
     }
@@ -11814,18 +14887,37 @@ window.IslandFoundry = (() => {
     if (state && !isInPlayerReach(state, tile.x, tile.y)) {
       cls += " tile--out-of-reach";
     }
+    if (state && witherStormCovers(state, tile.x, tile.y)) {
+      const storm = activeWitherStorm(state);
+      cls += " tile--wither";
+      if (tile.witherTorn) cls += " tile--wither-torn";
+      if (isWitherStormHoleOpen(storm) && isWitherStormCore(state, tile.x, tile.y)) {
+        cls += " tile--wither-hole";
+      } else if (
+        isWitherStormCore(state, tile.x, tile.y) &&
+        !isWitherStormCoreHidden(storm)
+      ) {
+        cls += " tile--wither-core";
+      } else if (isWitherStormHead(state, tile.x, tile.y)) {
+        cls += " tile--wither-head";
+      }
+      if (witherStormBeamCovers(state, tile.x, tile.y)) cls += " tile--wither-beam";
+    }
     return cls;
   }
 
   function tileLabel(tile) {
     let label = "";
-    if (state && isInsideBase(state) && tile?.kind) {
+    if (state && isInsideBelly(state) && tile) {
+      label = tile.icon || "";
+    } else if (state && isInsideBase(state) && tile?.kind) {
       if (tile.icon) label = tile.icon;
       else if (tile.kind === "exit" || tile.kind === "door") label = "🚪";
       else if (tile.kind === "upgrade") label = "⬆";
       else if (tile.kind === "keyHook" || tile.feature === "keyHook") {
         label = tile.icon || (state?.baseKeyOnHook ? "🔑" : "🪝");
-      } else if (tile.kind === "wall") label = "";
+      } else if (tile.feature === "note") label = "📜";
+      else if (tile.kind === "wall") label = "";
       else label = "";
     } else if (tile.machine === "drill") label = "🔩";
     else if (tile.machine === "smelter") label = "🔥";
@@ -11852,12 +14944,25 @@ window.IslandFoundry = (() => {
       };
       label = map[tile.node] || "?";
     }
+    if (state && !isInsideBase(state) && !isInsideBelly(state)) {
+      const storm = activeWitherStorm(state);
+      if (isWitherStormHoleOpen(storm) && isWitherStormCore(state, tile.x, tile.y)) {
+        label = "🕳️";
+      } else if (
+        isWitherStormCore(state, tile.x, tile.y) &&
+        !isWitherStormCoreHidden(storm)
+      ) {
+        label = "💠";
+      } else if (isWitherStormHead(state, tile.x, tile.y)) {
+        label = "💀";
+      }
+    }
     if (label && label !== "·" && isSixSevenModInstalled()) return "6-7";
     return label;
   }
 
   function refreshTilePowerStyles() {
-    if (!root || !state || isInsideBase(state)) return;
+    if (!root || !state || isInsideBase(state) || isInsideBelly(state)) return;
     const grid = root.querySelector("#world-grid");
     if (!grid) return;
     for (const btn of grid.querySelectorAll(".tile")) {
@@ -11889,7 +14994,7 @@ window.IslandFoundry = (() => {
   }
 
   function isPlaceBuildMode() {
-    if (state && isInsideBase(state)) return false;
+    if (state && (isInsideBase(state) || isInsideBelly(state))) return false;
     return Boolean(state?.buildMode && PLACEABLE.includes(state.buildMode));
   }
 
@@ -12004,22 +15109,55 @@ window.IslandFoundry = (() => {
 
   function renderWorld() {
     const grid = root.querySelector("#world-grid");
+    const inBelly = isInsideBelly(state);
     const inside = isInsideBase(state);
-    const { cols } = activeMapSize(state);
-    const tiles = inside ? state.interiorTiles || [] : state.tiles;
-    const nightOut = !inside && isNightTime(state.worldMinutes);
-    const nightAmbient = nightOut ? nightMapAmbient(state) : 1;
-    const dawnGlow = dawnApproachProgress(state.worldMinutes);
-    grid.style.setProperty("--cols", cols);
-    grid.style.setProperty("--dawn-glow", dawnGlow.toFixed(3));
-    grid.classList.toggle("is-inside-base", inside);
-    grid.classList.toggle("is-night", nightOut);
-    grid.setAttribute("aria-label", inside ? "Inside the Base" : "Resource island");
-    grid.innerHTML = "";
+    const indoor = inside || inBelly;
     normalizePlayer(state);
     const px = state.player.x;
     const py = state.player.y;
+    const { cols } = activeMapSize(state);
+    let tiles = inBelly
+      ? state.bellyTiles || []
+      : inside
+        ? state.interiorTiles || []
+        : state.tiles;
+    let viewCols = cols;
+    if (inBelly && tiles.length) {
+      const r = BELLY_VIEW_RADIUS;
+      const cx = Math.max(r, Math.min(BELLY_COLS - 1 - r, px));
+      const cy = Math.max(r, Math.min(BELLY_ROWS - 1 - r, py));
+      viewCols = r * 2 + 1;
+      const windowTiles = [];
+      for (let y = cy - r; y <= cy + r; y++) {
+        for (let x = cx - r; x <= cx + r; x++) {
+          windowTiles.push(tiles[y * BELLY_COLS + x]);
+        }
+      }
+      tiles = windowTiles;
+    }
+    const boltTiles = inBelly ? bellyBoltTileKeys(state) : null;
+    const nightOut = !indoor && isNightTime(state.worldMinutes);
+    const nightAmbient = nightOut ? nightMapAmbient(state) : 1;
+    const dawnGlow = dawnApproachProgress(state.worldMinutes);
+    grid.style.setProperty("--cols", viewCols);
+    grid.style.setProperty("--dawn-glow", dawnGlow.toFixed(3));
+    grid.classList.toggle("is-inside-base", inside);
+    grid.classList.toggle("is-inside-belly", inBelly);
+    grid.classList.toggle("is-night", nightOut);
+    const liveStorm = !indoor ? activeWitherStorm(state) : null;
+    grid.classList.toggle("is-wither-storm", Boolean(liveStorm));
+    if (liveStorm) {
+      grid.setAttribute("data-wither-tear", String(witherStormLiveStats(liveStorm).tear));
+    } else {
+      grid.removeAttribute("data-wither-tear");
+    }
+    grid.setAttribute(
+      "aria-label",
+      inBelly ? "Belly of the Beast" : inside ? "Inside the Base" : "Resource island"
+    );
+    grid.innerHTML = "";
     for (const tile of tiles) {
+      if (!tile) continue;
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = tileClass(tile);
@@ -12029,7 +15167,7 @@ window.IslandFoundry = (() => {
       if (tile.feature) btn.dataset.feature = tile.feature;
       // Outdoor hills: rise up; dirt face = uncovered steps vs south neighbor.
       let hillFace = 0;
-      if (!inside) {
+      if (!indoor) {
         const h = tileHeight(tile);
         hillFace = tileBackFaceHeight(state, tile);
         btn.dataset.height = String(h);
@@ -12073,16 +15211,101 @@ window.IslandFoundry = (() => {
           `<span class="tile__player" title="You" aria-label="You">${youIcon}</span>`
         );
       }
-      const monster = inside ? null : monsterAt(state, tile.x, tile.y);
+      const monster = indoor && !inBelly ? null : monsterAt(state, tile.x, tile.y);
       if (monster) {
         btn.classList.add("tile--monster");
+        if (monster.kind === "tainted") btn.classList.add("tile--tainted");
+        if (monster.kind === "skeleton") btn.classList.add("tile--tainted-skeleton");
+        if (monster.kind === "boss") btn.classList.add("tile--belly-boss");
+        if (monster.kind === "head") btn.classList.add("tile--belly-head");
+        if (monster.kind === "tentacle") {
+          btn.classList.add("tile--belly-tentacle");
+          if (isTentacleDizzy(state.bellyFight, monster)) {
+            btn.classList.add("tile--belly-tentacle-dizzy");
+          }
+        }
         const modOn = isSixSevenModInstalled();
-        const mLabel = modOn ? "6-7" : GameData.monsters?.label || "Night Monster";
-        const mIcon = modOn ? "6-7" : GameData.monsters?.icon || "🧟";
+        const mLabel = modOn
+          ? "6-7"
+          : monster.kind === "boss"
+            ? "Mini-boss"
+            : monster.kind === "head"
+              ? "Wither head"
+              : monster.kind === "tentacle"
+                ? isTentacleDizzy(state.bellyFight, monster)
+                  ? "Dizzy tentacle"
+                  : "Tentacle"
+                : monster.kind === "skeleton"
+                  ? "Tainted skeleton"
+                  : monster.kind === "tainted"
+                    ? "Tainted monster"
+                    : GameData.monsters?.label || "Night Monster";
+        const mIcon = modOn
+          ? "6-7"
+          : monster.kind === "boss"
+            ? "😈"
+            : monster.kind === "head"
+              ? "💀"
+              : monster.kind === "tentacle"
+                ? isTentacleDizzy(state.bellyFight, monster)
+                  ? "😵"
+                  : "🦑"
+                : monster.kind === "skeleton"
+                  ? "☠️"
+                  : monster.kind === "tainted"
+                    ? "👾"
+                    : GameData.monsters?.icon || "🧟";
         btn.insertAdjacentHTML(
           "beforeend",
           `<span class="tile__monster" title="${mLabel}" aria-label="${mLabel}">${mIcon}</span>`
         );
+      }
+      if (inBelly && boltTiles?.has(`${tile.x},${tile.y}`)) {
+        btn.classList.add("tile--belly-bolt");
+      }
+      if (inBelly && bellyCrystalAt(state, tile.x, tile.y)) {
+        const crystal = bellyCrystalAt(state, tile.x, tile.y);
+        btn.classList.add("tile--belly-crystal");
+        btn.insertAdjacentHTML(
+          "beforeend",
+          `<span class="tile__crystal" title="Tentacle crystal ${crystal.hp}/${crystal.maxHp}" aria-label="Tentacle crystal">💎</span>`
+        );
+      }
+      if (inBelly && bellyShotAt(state, tile.x, tile.y)) {
+        const shot = bellyShotAt(state, tile.x, tile.y);
+        btn.classList.add("tile--belly-shot", `tile--belly-shot-${shot.kind}`);
+        const shotIcon = shot.kind === "fire" ? "🔥" : shot.kind === "arrow" ? "➤" : "🟣";
+        btn.insertAdjacentHTML(
+          "beforeend",
+          `<span class="tile__shot" aria-hidden="true">${shotIcon}</span>`
+        );
+      }
+      if (inBelly) {
+        if (tile.kind === "exit" || tile.feature === "exit") {
+          btn.title = "Climb out of the beast — walk on or click";
+        } else if (tile.feature === "core" || tile.kind === "core") {
+          btn.title = isBellyCoreOpen(state)
+            ? "Wither Storm core — click to strike"
+            : "The core is sealed — slay every enemy first";
+        } else if (tile.kind === "wall") {
+          btn.title = "Tainted purple flesh";
+        } else if (bellyCrystalAt(state, tile.x, tile.y)) {
+          const crystal = bellyCrystalAt(state, tile.x, tile.y);
+          btn.title = `Tentacle crystal ${crystal.hp}/${crystal.maxHp} — smash it to dizzy a tentacle`;
+        } else if (tile.room === "littleHall") {
+          btn.title = "Little hall — outer maze";
+        } else if (tile.room === "bigHall") {
+          btn.title = "Big hall — inner passages";
+        } else if (tile.room === "coreRoom") {
+          btn.title = "Core chamber";
+        } else {
+          btn.title = tile.label || "Belly of the Beast";
+        }
+        if (tile.x === px && tile.y === py) {
+          btn.title = (btn.title ? `${btn.title} · ` : "") + "You (WASD to move)";
+        }
+        grid.appendChild(btn);
+        continue;
       }
       if (inside) {
         if (tile.kind === "exit") btn.title = "Front door — walk on or click to leave";
@@ -12102,6 +15325,8 @@ window.IslandFoundry = (() => {
           btn.title = state.baseKeyOnHook
             ? "Key hook — click to take the Base Key"
             : "Key hook — click to hang the Base Key";
+        } else if (tile.feature === "note") {
+          btn.title = "Strange Note — click to take";
         } else if (tile.kind === "upgrade") {
           const base = findPlayerBase(state);
           const tier = Math.max(1, Math.floor(Number(base?.tier) || 1));
@@ -12114,7 +15339,7 @@ window.IslandFoundry = (() => {
         else if (tile.room === "living") btn.title = "Living Room — click to watch TV";
         else if (tile.room === "kitchen") btn.title = "Kitchen — click to store food";
         else if (tile.room === "storage") btn.title = "Storage — click to store items";
-        else if (tile.room === "workroom") btn.title = "Workroom — click to craft (3×3)";
+        else if (tile.room === "workroom") btn.title = "Workroom — click to craft or smelt";
         else btn.title = tile.label || INTERIOR_ROOM_LABELS[tile.room] || "Floor";
         if (tile.x === px && tile.y === py) {
           btn.title = (btn.title ? `${btn.title} · ` : "") + "You (WASD to move)";
@@ -12233,6 +15458,20 @@ window.IslandFoundry = (() => {
             ? `${mLabel} (${hp}/${maxHp}) — sword one-shot`
             : `${mLabel} (${hp}/${maxHp}) — fist 1 dmg / sword one-shot`;
       }
+      if (witherStormCovers(state, tile.x, tile.y)) {
+        const storm = activeWitherStorm(state);
+        if (isWitherStormHoleOpen(storm) && isWitherStormCore(state, tile.x, tile.y)) {
+          btn.title = "A hole in the storm — walk in to enter the Belly of the Beast";
+        } else if (isWitherStormCoreHidden(storm)) {
+          btn.title = "Wither Storm mass — the command block is buried";
+        } else if (isWitherStormCore(state, tile.x, tile.y)) {
+          btn.title = `Wither Storm core ${storm.hp}/${storm.maxHp} (${witherStormProtection(storm)} prot) — click to strike`;
+        } else if (isWitherStormHead(state, tile.x, tile.y)) {
+          btn.title = "Wither Storm head — strike the command block";
+        } else {
+          btn.title = (btn.title ? `${btn.title} · ` : "") + "Consumed by the Wither Storm";
+        }
+      }
       if (tile.x === px && tile.y === py) {
         btn.title = (btn.title ? `${btn.title} · ` : "") + "You (WASD to move)";
       }
@@ -12241,7 +15480,96 @@ window.IslandFoundry = (() => {
     refreshBuildPreview();
     syncSkySkyline();
     syncSkyResources();
+    renderMinimap();
+    renderBellyCrystalBolts();
     if (fpvMode) renderFpv();
+  }
+
+  function renderBellyCrystalBolts() {
+    const svg = document.getElementById("belly-crystal-bolts");
+    const grid = root?.querySelector("#world-grid");
+    const stage = grid?.parentElement;
+    if (!svg || !grid || !stage) return;
+    const crystals = state?.bellyFight?.crystals || [];
+    const show = isInsideBelly(state) && !fpvMode && crystals.length > 0;
+    svg.hidden = !show;
+    svg.replaceChildren();
+    if (!show) return;
+
+    const sr = stage.getBoundingClientRect();
+    svg.setAttribute("viewBox", `0 0 ${Math.max(1, sr.width)} ${Math.max(1, sr.height)}`);
+    svg.setAttribute("width", "100%");
+    svg.setAttribute("height", "100%");
+
+    const sample = grid.querySelector(".tile");
+    const gap = parseFloat(getComputedStyle(grid).columnGap || getComputedStyle(grid).gap) || 4;
+    const tileCenter = (x, y) => {
+      const btn = grid.querySelector(`.tile[data-x="${x}"][data-y="${y}"]`);
+      if (btn) {
+        const r = btn.getBoundingClientRect();
+        return { x: r.left + r.width / 2 - sr.left, y: r.top + r.height / 2 - sr.top };
+      }
+      if (!sample) return null;
+      const r = sample.getBoundingClientRect();
+      const sx = Number(sample.dataset.x);
+      const sy = Number(sample.dataset.y);
+      return {
+        x: r.left + r.width / 2 - sr.left + (x - sx) * (r.width + gap),
+        y: r.top + r.height / 2 - sr.top + (y - sy) * (r.height + gap),
+      };
+    };
+
+    const ns = "http://www.w3.org/2000/svg";
+    const defs = document.createElementNS(ns, "defs");
+    svg.appendChild(defs);
+    bellyBoltRoutes(state).forEach((route, index) => {
+      const points = route.tiles
+        .map((tile) => tileCenter(tile.x, tile.y))
+        .filter(Boolean);
+      if (points.length < 2) return;
+      const jag = 5;
+      const flicker = (Date.now() / 90 + index * 13) % 1;
+      const pts = points
+        .map((p, i) => {
+          if (i === 0 || i === points.length - 1) return `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+          const prev = points[i - 1];
+          const next = points[i + 1];
+          const dx = next.x - prev.x;
+          const dy = next.y - prev.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const wave = Math.sin(i * 1.7 + flicker * Math.PI * 2) * jag;
+          return `${(p.x + (-dy / len) * wave).toFixed(1)},${(p.y + (dx / len) * wave).toFixed(1)}`;
+        })
+        .join(" ");
+      const from = points[0];
+      const to = points[points.length - 1];
+      const gradId = `belly-bolt-grad-${index}`;
+      const grad = document.createElementNS(ns, "linearGradient");
+      grad.setAttribute("id", gradId);
+      grad.setAttribute("gradientUnits", "userSpaceOnUse");
+      grad.setAttribute("x1", from.x.toFixed(1));
+      grad.setAttribute("y1", from.y.toFixed(1));
+      grad.setAttribute("x2", to.x.toFixed(1));
+      grad.setAttribute("y2", to.y.toFixed(1));
+      const stopA = document.createElementNS(ns, "stop");
+      stopA.setAttribute("offset", "0%");
+      stopA.setAttribute("stop-color", "#9ef6ff");
+      const stopB = document.createElementNS(ns, "stop");
+      stopB.setAttribute("offset", "100%");
+      stopB.setAttribute("stop-color", "#ff6aa0");
+      grad.appendChild(stopA);
+      grad.appendChild(stopB);
+      defs.appendChild(grad);
+      const glow = document.createElementNS(ns, "polyline");
+      glow.setAttribute("class", "belly-crystal-bolts__glow");
+      glow.setAttribute("points", pts);
+      const core = document.createElementNS(ns, "polyline");
+      core.setAttribute("class", "belly-crystal-bolts__core");
+      core.setAttribute("points", pts);
+      core.setAttribute("stroke", `url(#${gradId})`);
+      svg.appendChild(glow);
+      svg.appendChild(core);
+    });
   }
 
   const FPV_SIZE = 108;
@@ -12273,8 +15601,17 @@ window.IslandFoundry = (() => {
   }
 
   function fpvTileColor(tile, layer, topLayer) {
-    const ground = state && isInsideBase(state) ? 0 : tileHeight(tile);
+    const ground = state && (isInsideBase(state) || isInsideBelly(state)) ? 0 : tileHeight(tile);
     if (layer < ground) return "#6b4524";
+    if (state && isInsideBelly(state)) {
+      if (tile?.kind === "wall") return "#2a1038";
+      if (tile?.kind === "exit") return "#6a4088";
+      if (tile?.feature === "core" || tile?.kind === "core") return "#c86aff";
+      const bolt = bellyBoltTileKeys(state).has(`${tile.x},${tile.y}`);
+      if (tile?.room === "littleHall") return bolt ? "#4a6a88" : "#3a1848";
+      if (tile?.room === "coreRoom") return bolt ? "#6a5088" : "#5a2880";
+      return bolt ? "#5a7098" : "#4a2060";
+    }
     if (state && isInsideBase(state)) {
       if (tile?.kind === "wall") return "#3d342c";
       if (tile?.kind === "exit" || tile?.kind === "door") return "#5a4030";
@@ -12298,6 +15635,15 @@ window.IslandFoundry = (() => {
     if (tile?.node === "iron") return "#b06a3a";
     if (tile?.node === "copper") return "#b87333";
     if (tile?.node === "carrot") return "#4a6a28";
+    if (
+      state &&
+      isWitherStormCore(state, tile.x, tile.y) &&
+      !isWitherStormCoreHidden(activeWitherStorm(state))
+    ) {
+      return "#5a2068";
+    }
+    if (state && isWitherStormHead(state, tile.x, tile.y)) return "#3a1020";
+    if (state && witherStormCovers(state, tile.x, tile.y)) return "#1a1024";
     return "#2f5a3a";
   }
 
@@ -12401,7 +15747,7 @@ window.IslandFoundry = (() => {
       view.removeAttribute("hidden");
     }
     normalizePlayer(state);
-    const inside = isInsideBase(state);
+    const inside = isInsideBase(state) || isInsideBelly(state);
     const night = !inside && isNightTime(state.worldMinutes);
     sky?.classList.toggle("is-night", night);
     sky?.classList.toggle("is-inside", inside);
@@ -12428,7 +15774,9 @@ window.IslandFoundry = (() => {
         const h = fpvTileHeight(tile, inside);
         const self = tx === px && ty === py;
         const label = self ? "" : tileLabel(tile);
-        const monster = !inside ? monsterAt(state, tx, ty) : null;
+        const inBellyView = isInsideBelly(state);
+        const monster = !inside || inBellyView ? monsterAt(state, tx, ty) : null;
+        const crystal = inBellyView ? bellyCrystalAt(state, tx, ty) : null;
 
         if (h <= 0) {
           parts.push(
@@ -12459,9 +15807,17 @@ window.IslandFoundry = (() => {
           );
         }
 
-        if (monster && !self) {
+        if ((monster || crystal) && !self) {
           const my = -((Math.max(h, 0) + 0.85) * FPV_SIZE) + eyeLift;
-          const icon = isSixSevenModInstalled() ? "6-7" : GameData.monsters?.icon || "🧟";
+          let icon = GameData.monsters?.icon || "🧟";
+          if (crystal) icon = "💎";
+          else if (monster?.kind === "boss") icon = "😈";
+          else if (monster?.kind === "head") icon = "💀";
+          else if (monster?.kind === "tentacle") {
+            icon = isTentacleDizzy(state.bellyFight, monster) ? "😵" : "🦑";
+          } else if (monster?.kind === "skeleton") icon = "☠️";
+          else if (monster?.kind === "tainted") icon = "👾";
+          if (isSixSevenModInstalled()) icon = "6-7";
           parts.push(
             `<div class="fpv-sprite" style="transform:translate3d(${wx}px, ${my}px, ${wz}px)">${icon}</div>`
           );
@@ -12550,7 +15906,26 @@ window.IslandFoundry = (() => {
     if (toolEl) toolEl.textContent = toolName;
     if (buildEl) {
       if (gamePaused) buildEl.textContent = "Paused (Esc)";
-      else if (isInsideBase(state)) {
+      else if (isInsideBelly(state)) {
+        const fight = ensureBellyFight(state);
+        const phase =
+          fight.strikes <= 0
+            ? "strike the core"
+            : fight.strikes === 1
+              ? fight.coreOpen
+                ? "phase 1 cleared — strike again"
+                : "phase 1 — slay every tainted"
+              : fight.strikes === 2
+                ? fight.coreOpen
+                  ? "phase 2 cleared — strike again"
+                  : "phase 2 — slay the mini-boss and its tainted"
+                : fight.strikes === 3
+                  ? fight.coreOpen
+                    ? "phase 3 cleared — final strike"
+                    : "phase 3 — smash crystals, then slay every enemy"
+                  : "the light comes";
+        buildEl.textContent = `Belly of the Beast · ${phase}`;
+      } else if (isInsideBase(state)) {
         const base = findPlayerBase(state);
         buildEl.textContent = `Inside ${getBaseTierInfo(base?.tier).name} · 🚪 leave · ⬆ upgrade`;
       } else if (!state.buildMode) buildEl.textContent = "Build: off (Q) · Demolish: F";
@@ -12567,6 +15942,8 @@ window.IslandFoundry = (() => {
         toast.hidden = true;
       }
     }
+    syncRealmHud();
+    syncStormHud();
   }
 
   function render() {
@@ -12587,6 +15964,67 @@ window.IslandFoundry = (() => {
     const x = Number(btn.dataset.x);
     const y = Number(btn.dataset.y);
 
+    if (isInsideBelly(state)) {
+      if (isBellyWhiteout(state)) return;
+      const tile = getActiveTile(state, x, y);
+      if (!tile) return;
+      if (!isInPlayerReach(state, x, y)) {
+        toastOutOfReach(state);
+        renderHud();
+        return;
+      }
+      if (hitMonsterAt(state, x, y)) {
+        updateGoals(state);
+        saveState(state);
+        render();
+        return;
+      }
+      if (tile.kind === "exit" || tile.feature === "exit") {
+        leaveBellyOfTheBeast(state);
+        saveState(state);
+        render();
+        return;
+      }
+      if (tile.feature === "core" || tile.kind === "core") {
+        if (hitWitherStormAt(state, x, y)) {
+          updateGoals(state);
+          saveState(state);
+          render();
+        } else {
+          renderHud();
+        }
+        return;
+      }
+      if (tile.kind === "wall") {
+        setToast(state, "Tainted flesh walls you in");
+        renderHud();
+        return;
+      }
+      if (bellyTentacleAt(state, x, y)) {
+        setToast(state, "A tentacle — it grabs and throws. 50 HP.");
+        renderHud();
+        return;
+      }
+      if (tile.room === "littleHall") {
+        setToast(state, "A little hall — the outer maze");
+        renderHud();
+        return;
+      }
+      if (tile.room === "bigHall") {
+        setToast(state, "A big hall — the inner passages");
+        renderHud();
+        return;
+      }
+      if (tile.room === "coreRoom") {
+        setToast(state, "The core chamber — halls do not hurt you. The fight does.");
+        renderHud();
+        return;
+      }
+      setToast(state, "Belly of the Beast — south exit climbs out.");
+      renderHud();
+      return;
+    }
+
     if (isInsideBase(state)) {
       const tile = getActiveTile(state, x, y);
       if (!tile) return;
@@ -12601,6 +16039,16 @@ window.IslandFoundry = (() => {
       }
       if (tile.feature === "keyHook") {
         if (tryUseKeyHook(state, tile)) {
+          updateGoals(state);
+          saveState(state);
+          render();
+        } else {
+          renderHud();
+        }
+        return;
+      }
+      if (tile.feature === "note") {
+        if (tryCollectBaseNote(state, tile)) {
           updateGoals(state);
           saveState(state);
           render();
@@ -12673,6 +16121,26 @@ window.IslandFoundry = (() => {
 
     // Fight night monsters before other tile actions (not while placing/demolishing).
     if (!state.buildMode && hitMonsterAt(state, x, y)) {
+      updateGoals(state);
+      saveState(state);
+      render();
+      return;
+    }
+
+    if (
+      !state.buildMode &&
+      isWitherStormHoleOpen(activeWitherStorm(state)) &&
+      isWitherStormCore(state, x, y) &&
+      state.player.x === x &&
+      state.player.y === y
+    ) {
+      enterBellyOfTheBeast(state);
+      saveState(state);
+      render();
+      return;
+    }
+
+    if (!state.buildMode && hitWitherStormAt(state, x, y)) {
       updateGoals(state);
       saveState(state);
       render();
@@ -12785,6 +16253,21 @@ window.IslandFoundry = (() => {
     const dt = Math.min(0.05, (ts - last) / 1000);
     last = ts;
     tickMachines(state, dt);
+    if (isBellyWhiteout(state) && Date.now() - state.bellyWhiteoutAt >= BELLY_WHITEOUT_MS) {
+      finishBellyVictory(state);
+      render();
+    } else if (isInsideBelly(state) && !isBellyWhiteout(state)) {
+      bellyCombatAcc += dt;
+      if (bellyCombatAcc >= 0.45) {
+        bellyCombatAcc = 0;
+        if (tickBellyCombat(state)) {
+          renderWorld();
+          renderHud();
+        }
+      }
+    } else {
+      bellyCombatAcc = 0;
+    }
     updateGoals(state);
     renderHud();
     // Do NOT rebuild the world DOM every frame — that cancels clicks mid-press.
@@ -12807,6 +16290,9 @@ window.IslandFoundry = (() => {
       if (m.type === "smelter") ensureSmelterShape(m);
       if (m.type === "generator") ensureGeneratorShape(m);
     }
+    ensureWorkroomCraft(state);
+    ensureWorkroomSmelter(state);
+    if (state.workroomStation !== "smelt") state.workroomStation = "craft";
     normalizeEquipment(state);
     if (!state.activeTool) state.activeTool = "hand";
 
@@ -12861,6 +16347,9 @@ window.IslandFoundry = (() => {
     closePauseUi();
     window.KeaghanSfx?.startMusic?.();
     normalizeAda(state);
+    maybeUnlockWitherStormMod(state);
+    ensureWitherStorm(state);
+    applyNoteTileState(state);
     if (!state.adaHeard.welcome) speakAda(state, "welcome");
     else refreshAdaPanel();
     render();
@@ -12872,6 +16361,9 @@ window.IslandFoundry = (() => {
   function unmount() {
     playActive = false;
     gamePaused = false;
+    syncRealmHud();
+    syncStormHud();
+    window.KeaghanSfx?.stopOminousMusic?.();
     lightningWarnCell = null;
     resetClockHandTracking();
     updateSkyBackground();
@@ -12900,6 +16392,7 @@ window.IslandFoundry = (() => {
     closeBaseEnterPrompt();
     closeBaseLeavePrompt();
     closeSleepPrompt();
+    closeStrangeNoteUi();
     baseEnterFrom = null;
     baseLeaveFrom = null;
     closePauseUi();
@@ -12923,6 +16416,9 @@ window.IslandFoundry = (() => {
     resetSlot,
     clearAllSlots,
     refreshAda: refreshAdaPanel,
+    maybeUnlockWitherStormMod,
+    onWitherStormModChanged,
+    onSixSevenNoteUnlockChanged,
     previewLightningStrike,
     clearLightningPreview,
     onLightningStrike,
